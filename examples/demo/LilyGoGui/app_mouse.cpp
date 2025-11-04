@@ -94,10 +94,10 @@ void app_mouse_load(lv_obj_t *cont)
     return;
   }
   
-  // Mode switch button (small, top-left)
+  // Mode switch button (top-left, below return button to avoid overlap)
   lv_obj_t *mode_btn = lv_btn_create(cont);
   lv_obj_set_size(mode_btn, 35, 35);
-  lv_obj_align(mode_btn, LV_ALIGN_TOP_LEFT, 5, 5);
+  lv_obj_align(mode_btn, LV_ALIGN_TOP_LEFT, 5, 48);  // Positioned below return button (40px button + 8px gap)
   lv_obj_add_event_cb(mode_btn, mode_switch_event_cb, LV_EVENT_CLICKED, NULL);
   lv_obj_t *mode_btn_label = lv_label_create(mode_btn);
   lv_label_set_text(mode_btn_label, LV_SYMBOL_REFRESH);
