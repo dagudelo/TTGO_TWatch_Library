@@ -20,6 +20,7 @@ void app_batt_voltage_load(lv_obj_t *cont) {
     lv_label_set_recolor(batt_voltage_label, true);    /*Enable re-coloring by commands in the text*/
     lv_obj_center(batt_voltage_label);
     lv_obj_set_style_text_color(batt_voltage_label, lv_color_white(), 0);
+    lv_label_set_text(batt_voltage_label, "#FF0000 Battery Voltage#");
 }
 
 

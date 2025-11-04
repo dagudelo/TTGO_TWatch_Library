@@ -37,9 +37,11 @@ void app_music_load(lv_obj_t *cont) {
   lv_list_add_text(music_list, "Music name");
   String name_list;
   
-  name_list += "ring_1.mp3";
+  name_list += "mp3_array";
   name_list += "\n";
-  name_list += "ring_setup.mp3";
+  name_list += "mp3_ring_setup";
+  name_list += "\n";
+   name_list += "boot_music";
   name_list += "\n";
 
   lv_roller_set_options(music_list, name_list.c_str(), LV_ROLLER_MODE_NORMAL);
@@ -99,9 +101,9 @@ static void play_event_cb(lv_event_t *e) {
   lv_obj_t *list = (lv_obj_t *)lv_event_get_user_data(e);
   char play_music_path[50];
   lv_roller_get_selected_str(list, play_music_path, 0);
-  String path = play_music_path;
-  Serial.println(path);
-  xQueueSend(play_music_queue, &path, 0);
+  std::string *pStr = new std::string(play_music_path);
+  //Serial.println(path);
+  xQueueSend(play_music_queue, &pStr, (TickType_t)10);
 }
 /*
 static void drag_music_time_event_cb(lv_event_t *e) {

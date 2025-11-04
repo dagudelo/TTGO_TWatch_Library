@@ -8,6 +8,16 @@
 #include "app_step_counter.h"
 #include "app_batt_voltage.h"
 #include "app_radio.h"
+#include "lv_example_menu_2.h"
+#include "app_wireless.h"
+#include "app_music.h"
+#include "app_fft.h"
+#include "app_configuration.h"
+#include "app_mouse.h"
+#include "app_keyboard.h"
+#include "app_alarm.h"
+
+
 
 
 LV_FONT_DECLARE(alibaba_font);
@@ -25,6 +35,8 @@ LV_IMG_DECLARE(img_batt_voltage);
 LV_IMG_DECLARE(img_step_counter);
 LV_IMG_DECLARE(radio_img);
 LV_IMG_DECLARE(img_radio);
+LV_IMG_DECLARE(img_mouse);
+LV_IMG_DECLARE(key_img);
 
 
 static lv_style_t style_frameless;
@@ -32,7 +44,10 @@ static lv_obj_t *main_screen;
 static lv_group_t *menu_g, *app_g;
 static lv_indev_t *indev;
 void menu_name_label_event_cb(lv_event_t *e);
+static lv_obj_t *create_icon(lv_obj_t *parent, const lv_img_dsc_t *img);
+static lv_obj_t *create_return_button(lv_obj_t *parent, app_t *func_cb);
 
+/*
 void ui_boot_anim() {
   lv_obj_t *logo_img = lv_gif_create(lv_scr_act());
   lv_obj_center(logo_img);
@@ -40,6 +55,8 @@ void ui_boot_anim() {
   LV_DELAY(500);
   lv_obj_del(logo_img);
 }
+*/
+
 extern lv_obj_t *chart;
 extern lv_obj_t * step_counter_label;
 extern lv_obj_t * batt_voltage_label;
@@ -137,32 +154,32 @@ void style_init() {
 }
 
 void ui_init(void) {
-  menu_g = lv_group_create();
-  app_g = lv_group_create();
-  indev = lv_indev_get_next(NULL);
-  lv_indev_set_group(indev, menu_g);
-  lv_group_set_default(menu_g);
+  menu_g = lv_group_create();// crea los lv_group menu
+  app_g = lv_group_create();// crea los lv_group app
+  indev = lv_indev_get_next(NULL); // obtiene el siguiente indev
+  lv_indev_set_group(indev, menu_g); // setea el grupo menu al indev
+  lv_group_set_default(menu_g); // setea el grupo menu como default
 
-  style_init();
+  style_init(); // inicializa el estilo
   /* opening animation */
-  main_screen = lv_tileview_create(lv_scr_act());
-  lv_obj_align(main_screen, LV_ALIGN_TOP_RIGHT, 0, 0);
-  lv_obj_set_size(main_screen, LV_PCT(100), LV_PCT(100));
-  lv_obj_set_style_bg_color(main_screen, lv_color_hex(0x000000), LV_PART_MAIN);
+  main_screen = lv_tileview_create(lv_scr_act()); // crea el tileview
+  lv_obj_align(main_screen, LV_ALIGN_TOP_RIGHT, 0, 0); // alinea el tileview
+  lv_obj_set_size(main_screen, LV_PCT(100), LV_PCT(100)); // setea el tamaño del tileview
+  lv_obj_set_style_bg_color(main_screen, lv_color_hex(0x000000), LV_PART_MAIN); // setea el color de fondo del tileview
 
   /* Create two views for switching menus and app UI */
   lv_obj_t *menu_panel = lv_tileview_add_tile(main_screen, 0, 0, LV_DIR_HOR);
   lv_obj_set_style_bg_color(menu_panel, lv_color_hex(0xffffff), LV_PART_MAIN);
-  lv_obj_t *app_panel = lv_tileview_add_tile(main_screen, 0, 1, LV_DIR_HOR);
-  if(app_panel == NULL)
+  lv_obj_t *app_panel = lv_tileview_add_tile(main_screen, 0, 1, LV_DIR_HOR); 
+  if(app_panel == NULL) // si app_panel es NULL
     return;
 
-  lv_obj_clear_flag(menu_panel, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_clear_flag(menu_panel, LV_OBJ_FLAG_SCROLLABLE); // limpia la bandera scrollable de menu_panel
 
   /* Initialize the menu view */
-  lv_obj_t *panel = lv_obj_create(menu_panel);
-  lv_obj_set_size(panel, 240, 130);
-  lv_obj_set_scroll_snap_x(panel, LV_SCROLL_SNAP_CENTER);
+  lv_obj_t *panel = lv_obj_create(menu_panel); // crea un panel
+  lv_obj_set_size(panel, 240, 130); // setea el tamaño del panel
+  lv_obj_set_scroll_snap_x(panel, LV_SCROLL_SNAP_CENTER); 
   lv_obj_set_flex_flow(panel, LV_FLEX_FLOW_ROW);
   lv_obj_align(panel, LV_ALIGN_TOP_MID, 0, 10);
   lv_obj_add_style(panel, &style_frameless, 0);
@@ -177,6 +194,10 @@ void ui_init(void) {
   create_app(panel, "Configuration", &img_configuration, &app_config);
   create_app(panel, "Step Counter", &img_step_counter, &app_step_counter);
   create_app(panel, "Batt Voltage", &img_batt_voltage, &app_batt_voltage);
+  create_app(panel, "Mouse", &img_mouse, &app_mouse);
+  create_app(panel, "Keyboard", &key_img, &app_keyboard);
+  //create_app(panel, "lv Sample", &img_led, &lv_example_menu_2);
+  create_app(panel, "alarm", &img_controller, &app_alarm);
 
   /* Initialize the label */
   lv_obj_t *desc_label = lv_label_create(menu_panel);
@@ -202,6 +223,13 @@ void menu_name_label_event_cb(lv_event_t *e) {
   lv_label_set_text_fmt(label, v);
 }
 
+static lv_obj_t *create_icon(lv_obj_t *parent, const lv_img_dsc_t *img) {
+    lv_obj_t *icon = lv_img_create(parent);
+    lv_img_set_src(icon, img);
+    lv_obj_center(icon);
+    return icon;
+}
+/*
 void ui_send_msg(char *str, uint32_t delay) {
   lv_obj_t *msg_obj = lv_obj_create(main_screen);
   lv_obj_remove_style(msg_obj, NULL, LV_PART_SCROLLBAR);
@@ -228,3 +256,4 @@ void ui_send_msg(char *str, uint32_t delay) {
   });
   lv_anim_start(&a);
 }
+*/

@@ -26,8 +26,8 @@ void setup()
     beginLvglHelper();
 
     //Tips : Select a separate function to see the effect
-    lv_example_menu_1();
-    // lv_example_menu_2();
+    //lv_example_menu_1();
+     lv_example_menu_2();
     // lv_example_menu_3();
     // lv_example_menu_4();
     // lv_example_menu_5();

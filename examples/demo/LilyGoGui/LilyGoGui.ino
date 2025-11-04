@@ -18,6 +18,9 @@
 #define ENABLE_PLAYER
 #define ENABLE_IR_SENDER
 
+// Include composite HID implementation
+#include "BleCompositeHID.h"
+
 #include <LilyGoLib.h>
 #include <LV_Helper.h>
 #include <WiFi.h>
@@ -34,71 +37,91 @@ IRsend irsend(BOARD_IR_PIN);
 #include <AudioGeneratorWAV.h>
 #include <AudioOutputI2S.h>
 #include <AudioFileSourceSPIFFS.h>
-#include <AudioFileSourceFunction.h>
-#include <AudioGeneratorFLAC.h>
-#include <AudioGeneratorAAC.h>
-#include "esp_sntp.h"
-#include "Wire.h"
-#include <WiFiClientSecure.h>
-#include "global_flags.h"
-#include "ui.h"
-#include <driver/gpio.h>
-
+#include <map>
 extern const unsigned char mp3_array[16509];
 extern unsigned char mp3_ring_setup[86144];
-AudioFileSourceSPIFFS   *file_fs;
-AudioGeneratorWAV       *wav = NULL;
-AudioFileSourcePROGMEM  *file = NULL;
-AudioOutputI2S          *out = NULL;
-AudioGeneratorMP3       *mp3 = NULL;
-AudioFileSourceID3      *id3 = NULL;
-AudioGeneratorFLAC      *flac = NULL;
-AudioGeneratorAAC       *aac = NULL;
-
-extern lv_obj_t *step_counter_label;
-extern lv_obj_t *batt_voltage_label;
-extern lv_obj_t *chart;
-
-extern void set_text_radio_ta(const char *txt);
-
-void suspend_playMP3Handler(void);
-void resume_playMP3Handler(void);
-
-//lvgl event handler btn index
+extern const uint8_t boot_music[4365];
+std::map<String, const unsigned char *> arrayMap = {
+    {"mp3_array", mp3_array}, // mp3_array1 is a mp3 file
+    {"mp3_ring_setup", mp3_ring_setup},
+    {"boot_music", boot_music} // Add more entries as needed
+};
+std::map<String, size_t> arraySizeMap = {
+    {"mp3_array", sizeof(mp3_array)},
+    {"mp3_ring_setup", sizeof(mp3_ring_setup)},
+    {"boot_music", sizeof(boot_music)}};
+AudioFileSourceSPIFFS *file_fs;
+AudioGeneratorWAV *wav = NULL;
+AudioFileSourcePROGMEM *file = NULL;
+AudioOutputI2S *out = NULL;
+AudioGeneratorMP3 *mp3 = NULL;
+AudioFileSourceID3 *id3 = NULL;
+AudioGeneratorWAV *flac = NULL;
+AudioGeneratorWAV *aac = NULL;
+// lvgl event handler btn index
 bool is_pause = false;
 // Play task handler
 TaskHandle_t playMP3Handler;
 TaskHandle_t playWAVHandler;
 TaskHandle_t playFLACHandler;
 TaskHandle_t playACCHandler;
-
-uint8_t boot_music[4365];
 #endif
+#include "esp_sntp.h"
+#include "Wire.h"
+#include <WiFiClientSecure.h>
+#include "global_flags.h"
+#include "ui.h"
+#include "app_alarm.h"
+#include <driver/gpio.h>
+
+// Single composite HID device with keyboard and mouse capabilities
+BleCompositeHID bleHID("T-Watch HID", "LilyGo", 100);
+extern lv_obj_t *step_counter_label;
+extern lv_obj_t *batt_voltage_label;
+extern lv_obj_t *chart;
+extern void set_text_radio_ta(const char *txt);
+void suspend_playMP3Handler(void);
+void resume_playMP3Handler(void);
 
 #define BG_COLOR 0xffffff
 
-#define LVGL_MESSAGE_PROGRESS_CHANGED_ID        (88)
-#define DEFAULT_RECORD_FILENAME                 "/rec.wav"
-#define AUDIO_DATA                              boot_music
-#define RADIO_TRANSMIT_PAGE_ID                  9
-#define WIFI_SCAN_PAGE_ID                       8
-#define MIC_IR_PAGE_ID                          11
-
-#define DEFAULT_SCREEN_TIMEOUT                  15*1000
-#define DEFAULT_COLOR                           (lv_color_make(252, 218, 72))
-#define VAD_FRAME_LENGTH_MS                     30
-#define VAD_BUFFER_LENGTH                       (VAD_FRAME_LENGTH_MS * MIC_I2S_SAMPLE_RATE / 1000)
-
-#define WIFI_SSID             "Your WiFi SSID"
-#define WIFI_PASSWORD         "Your WiFi PASSWORD"
-
+#define LVGL_MESSAGE_PROGRESS_CHANGED_ID (88)
+#define DEFAULT_RECORD_FILENAME "/rec.wav"
+#define AUDIO_DATA boot_music
+#define RADIO_TRANSMIT_PAGE_ID 9
+#define WIFI_SCAN_PAGE_ID 8
+#define MIC_IR_PAGE_ID 11
+#define DEFAULT_SCREEN_TIMEOUT 15 * 1000
+#define DEFAULT_COLOR (lv_color_make(252, 218, 72))
+#define VAD_FRAME_LENGTH_MS 30
+#define VAD_BUFFER_LENGTH (VAD_FRAME_LENGTH_MS * MIC_I2S_SAMPLE_RATE / 1000)
+#define WIFI_SSID "Agudelo Bonilla Mesh"
+#define WIFI_PASSWORD "V1CT0R1446U5T1N"
 #define WIFI_CONNECT_WAIT_MAX (30 * 1000)
+#define NTP_SERVER1 "pool.ntp.org"
+#define NTP_SERVER2 "time.nist.gov"
+#define GMT_OFFSET_SEC -5 * 60 * 60
+#define DAY_LIGHT_OFFSET_SEC 0
+#define GET_TIMEZONE_API "https://ipapi.co/timezone/"
+#define LV_COLOR_WHITE LV_COLOR_MAKE(0xFF, 0xFF, 0xFF)
+#define LV_COLOR_SILVER LV_COLOR_MAKE(0xC0, 0xC0, 0xC0)
+#define LV_COLOR_GRAY LV_COLOR_MAKE(0x80, 0x80, 0x80)
+#define LV_COLOR_BLACK LV_COLOR_MAKE(0x00, 0x00, 0x00)
+#define LV_COLOR_RED LV_COLOR_MAKE(0xFF, 0x00, 0x00)
+#define LV_COLOR_MAROON LV_COLOR_MAKE(0x80, 0x00, 0x00)
+#define LV_COLOR_YELLOW LV_COLOR_MAKE(0xFF, 0xFF, 0x00)
+#define LV_COLOR_OLIVE LV_COLOR_MAKE(0x80, 0x80, 0x00)
+#define LV_COLOR_LIME LV_COLOR_MAKE(0x00, 0xFF, 0x00)
+#define LV_COLOR_GREEN LV_COLOR_MAKE(0x00, 0x80, 0x00)
+#define LV_COLOR_CYAN LV_COLOR_MAKE(0x00, 0xFF, 0xFF)
+#define LV_COLOR_AQUA LV_COLOR_CYAN
+#define LV_COLOR_TEAL LV_COLOR_MAKE(0x00, 0x80, 0x80)
+#define LV_COLOR_BLUE LV_COLOR_MAKE(0x00, 0x00, 0xFF)
+#define LV_COLOR_NAVY LV_COLOR_MAKE(0x00, 0x00, 0x80)
+#define LV_COLOR_MAGENTA LV_COLOR_MAKE(0xFF, 0x00, 0xFF)
+#define LV_COLOR_PURPLE LV_COLOR_MAKE(0x80, 0x00, 0x80)
+#define LV_COLOR_ORANGE LV_COLOR_MAKE(0xFF, 0xA5, 0x00)
 
-#define NTP_SERVER1           "pool.ntp.org"
-#define NTP_SERVER2           "time.nist.gov"
-#define GMT_OFFSET_SEC        0
-#define DAY_LIGHT_OFFSET_SEC  0
-#define GET_TIMEZONE_API      "https://ipapi.co/timezone/"
 
 LV_IMG_DECLARE(arrow_left_png);
 LV_IMG_DECLARE(arrow_right_png);
@@ -113,9 +136,8 @@ LV_FONT_DECLARE(quostige_16);
 LV_FONT_DECLARE(digital_play_st_24);
 LV_FONT_DECLARE(gracetians_32);
 LV_FONT_DECLARE(exninja_22);
-
-char standby_en = 1;
 LV_FONT_DECLARE(font_siegra);
+char standby_en = 1;
 
 void radioTask(lv_timer_t *parent);
 
@@ -126,24 +148,29 @@ void my_print(const char *buf)
 }
 
 lv_obj_t *wifi_test_obj = NULL;
-const char *ntpServer1 = "pool.ntp.org";
-const char *ntpServer2 = "time.nist.gov";
-const long  gmtOffset_sec = 3600;
-const int   daylightOffset_sec = 3600;
+// NTP servers are defined as macros above, using those instead
+const long gmtOffset_sec = -5 * 60 * 60;
+const int daylightOffset_sec = 0;
 struct tm timeinfo;
 struct tm show_timeinfo;
 struct tm show_timeinfo_old;
-
-
-
-
 static lv_obj_t *wifi_table_list;
 static lv_obj_t *charge_cont;
-
 extern lv_timer_t *transmitTask;
-
 static TaskHandle_t playerTaskHandler;
 static TaskHandle_t vadTaskHandler;
+lv_obj_t *mainGUI(void);
+lv_obj_t *hour = NULL;
+lv_obj_t *minute = NULL;
+lv_obj_t *second = NULL;
+lv_obj_t *year = NULL;
+lv_obj_t *month = NULL;
+lv_obj_t *week = NULL;
+lv_obj_t *day = NULL;
+lv_obj_t *state = NULL;
+lv_obj_t *bat_text = NULL;
+lv_obj_t *temp_text = NULL;
+lv_obj_t *bat = NULL;
 
 // Save the ID of the current page
 static uint8_t pageId = 0;
@@ -174,11 +201,8 @@ static int16_t *vad_buff = NULL;
 static vad_handle_t vad_inst = NULL;
 
 const size_t vad_buffer_size = VAD_BUFFER_LENGTH * sizeof(short);
-
-
-
-
-typedef  struct _lv_datetime {
+typedef struct _lv_datetime
+{
     lv_obj_t *obj;
     const char *name;
     uint16_t minVal;
@@ -187,31 +211,24 @@ typedef  struct _lv_datetime {
     uint8_t digitFormat;
 } lv_datetime_t;
 
-#define LV_DELAY(x)                                                                                                                                  \
-  do {                                                                                                                                               \
-    uint32_t t = x;                                                                                                                                  \
-    while (t--) {                                                                                                                                    \
-      lv_timer_handler();                                                                                                                            \
-      delay(1);                                                                                                                                      \
-    }                                                                                                                                                \
-  } while (0);
+#define LV_DELAY(x)             \
+    do                          \
+    {                           \
+        uint32_t t = x;         \
+        while (t--)             \
+        {                       \
+            lv_timer_handler(); \
+            delay(1);           \
+        }                       \
+    } while (0);
 
-
-
-
-
-
-
-
-
-
-const char *cn_week[7] = { "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun" };
-const char *cn_month[12] = { "Jan", "Feb", "Mar", "Ari", "May", "Jun", "Jul", "Aut", "Sep", "Oct", "Nov", "Dec"};
+const char *cn_week[7] = {"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"};
+const char *cn_month[12] = {"Jan", "Feb", "Mar", "Ari", "May", "Jun", "Jul", "Aut", "Sep", "Oct", "Nov", "Dec"};
 const char *cn_state[5] = {"a.m.", "mid", "p.m.", "night", "night"};
 
 typedef bool (*player_cb_t)(void);
 static player_cb_t player_task_cb = NULL;
-//static bool playWAV();
+// static bool playWAV();
 static bool playMP3();
 
 lv_obj_t *setupGUI(void);
@@ -221,7 +238,7 @@ QueueHandle_t led_flicker_queue;
 QueueHandle_t play_music_queue;
 QueueHandle_t play_time_queue;
 static EventGroupHandle_t lv_input_event;
-
+//BleGamepad bleGamepad;
 void factory_ui();
 void wifi_test(void);
 void wifiscan(lv_obj_t *parent);
@@ -231,137 +248,65 @@ void settingSensor();
 void settingRadio();
 void settingPlayer();
 void settingIRRemote();
-
 void PMUHandler();
 void lowPowerEnergyHandler();
 void destoryChargeUI();
-
 void radioTask(lv_timer_t *parent);
 static void PDM_Record(const char *song_name, uint32_t duration);
 static bool CreateWAV(const char *song_name, uint32_t duration, uint16_t num_channels, const uint32_t sampling_rate, uint16_t bits_per_sample);
 
-void WiFiScanDone(WiFiEvent_t event, WiFiEventInfo_t info)
-{
-    Serial.println("WiFiScanDone");
-    if (pageId != WIFI_SCAN_PAGE_ID) {
-        canScreenOff = true;
-        WiFi.removeEvent(WiFiEvent_t::ARDUINO_EVENT_WIFI_SCAN_DONE);
-        WiFi.mode(WIFI_OFF);
-        return;
-    }
-
-    int16_t counter =  WiFi.scanComplete();
-
-    lv_table_set_row_cnt(wifi_table_list, counter);
-
-    for (int i = 0; i < counter; ++i) {
-
-        lv_table_set_cell_value_fmt(wifi_table_list, i, 0,
-                                    LV_SYMBOL_WIFI"[%4d]"" %-10.10s",
-                                    WiFi.RSSI(i),
-                                    WiFi.SSID(i).c_str()
-                                   );
-
-        // Print SSID and RSSI for each network found
-        Serial.printf("%2d", i + 1);
-        Serial.print(" | ");
-        Serial.printf("%-32.32s", WiFi.SSID(i).c_str());
-        Serial.print(" | ");
-        Serial.printf("%4d", WiFi.RSSI(i));
-        Serial.print(" | ");
-        Serial.printf("%2d", WiFi.channel(i));
-        Serial.print(" | ");
-        switch (WiFi.encryptionType(i)) {
-        case WIFI_AUTH_OPEN:
-            Serial.print("open");
-            break;
-        case WIFI_AUTH_WEP:
-            Serial.print("WEP");
-            break;
-        case WIFI_AUTH_WPA_PSK:
-            Serial.print("WPA");
-            break;
-        case WIFI_AUTH_WPA2_PSK:
-            Serial.print("WPA2");
-            break;
-        case WIFI_AUTH_WPA_WPA2_PSK:
-            Serial.print("WPA+WPA2");
-            break;
-        case WIFI_AUTH_WPA2_ENTERPRISE:
-            Serial.print("WPA2-EAP");
-            break;
-        case WIFI_AUTH_WPA3_PSK:
-            Serial.print("WPA3");
-            break;
-        case WIFI_AUTH_WPA2_WPA3_PSK:
-            Serial.print("WPA2+WPA3");
-            break;
-        case WIFI_AUTH_WAPI_PSK:
-            Serial.print("WAPI");
-            break;
-        default:
-            Serial.print("unknown");
-        }
-        Serial.println();
-    }
-    //Keep scan
-    WiFi.scanNetworks(true);
-    canScreenOff = false;
-}
 
 void setup()
 {
     // Stop wifi
-    WiFi.mode(WIFI_MODE_NULL);
-
-    btStop();
-
+    // WiFi.mode(WIFI_MODE_NULL);
+    // btStop();
     setCpuFrequencyMhz(160);
-
     Serial.begin(115200);
-
     watch.begin();
-
     watch.initMicrophone();
-
     settingPMU();
-
     settingSensor();
-
     settingRadio();
-
     settingPlayer();
-
     settingIRRemote();
-
     beginLvglHelper(false);
-
-    //settingButtonStyle();
-    transmitTask =  lv_timer_create(radioTask, 200, NULL);
+    
+    // Initialize single composite BLE HID device (keyboard + mouse + media keys)
+    bleHID.begin();
+       
+    transmitTask = lv_timer_create(radioTask, 200, NULL);
     lv_timer_pause(transmitTask);
-    //factory_ui();
     global_event_group = xEventGroupCreate();
     led_setting_queue = xQueueCreate(5, sizeof(uint16_t));
     led_flicker_queue = xQueueCreate(5, sizeof(uint16_t));
-    play_music_queue = xQueueCreate(5, sizeof(String));
+    play_music_queue = xQueueCreate(10, sizeof(std::string*));  // Queue holds std::string* pointers
     play_time_queue = xQueueCreate(5, sizeof(uint32_t));
     lv_input_event = xEventGroupCreate();
-
-    usbPlugIn =  watch.isVbusIn();
-    sntp_servermode_dhcp(1);    // (optional)
-    configTime(gmtOffset_sec, daylightOffset_sec, ntpServer1, ntpServer2);
-    // wifi_test();
-
-    // while (show_timeinfo.tm_year <= 0) {
-    //     printLocalTime();
-    // }
+    usbPlugIn = watch.isVbusIn();
+    
+    // Initialize RTC time first - read from hardware RTC if available
+    struct tm rtc_timeinfo;
+    watch.getDateTime(&rtc_timeinfo);  // getDateTime() returns void, fills the struct
+    // Check if RTC time is valid (year should be reasonable, e.g., >= 2020)
+    if (rtc_timeinfo.tm_year >= 120) {  // tm_year is years since 1900, so 120 = 2020
+        // RTC has valid time, use it to set system time
+        time_t rtc_time = mktime(&rtc_timeinfo);
+        struct timeval tv = { .tv_sec = rtc_time };
+        settimeofday(&tv, NULL);
+        Serial.println("Initialized system time from RTC");
+    } else {
+        Serial.println("RTC time not available, will sync from NTP");
+    }
+    
+    sntp_servermode_dhcp(1); // (optional)
+    configTime(gmtOffset_sec, daylightOffset_sec, NTP_SERVER1, NTP_SERVER2);
+    wifi_test();
+    sntp_set_time_sync_notification_cb( timeavailable );
+       
 
     setupGUI();
-    // if (wifi_test_obj != NULL)
-    //     lv_obj_del_delayed(wifi_test_obj, 1);
-
-    // xTaskCreate(playMP3Task, "mp3", 8192, NULL, 10, &playMP3Handler);
-    // xTaskCreatePinnedToCore(wav_task, "wav_task", 1024 * 4, NULL, 2, NULL, 0);
+    xTaskCreatePinnedToCore(playMP3Task, "playMP3Task", 8192, NULL, 10, &playerTaskHandler, 0);
 }
 
 void suspend_playMP3Handler(void)
@@ -374,78 +319,35 @@ void resume_playMP3Handler(void)
     vTaskResume(playMP3Handler);
 }
 
-#define LV_COLOR_WHITE LV_COLOR_MAKE(0xFF, 0xFF, 0xFF)
-#define LV_COLOR_SILVER LV_COLOR_MAKE(0xC0, 0xC0, 0xC0)
-#define LV_COLOR_GRAY LV_COLOR_MAKE(0x80, 0x80, 0x80)
-#define LV_COLOR_BLACK LV_COLOR_MAKE(0x00, 0x00, 0x00)
-#define LV_COLOR_RED LV_COLOR_MAKE(0xFF, 0x00, 0x00)
-#define LV_COLOR_MAROON LV_COLOR_MAKE(0x80, 0x00, 0x00)
-#define LV_COLOR_YELLOW LV_COLOR_MAKE(0xFF, 0xFF, 0x00)
-#define LV_COLOR_OLIVE LV_COLOR_MAKE(0x80, 0x80, 0x00)
-#define LV_COLOR_LIME LV_COLOR_MAKE(0x00, 0xFF, 0x00)
-#define LV_COLOR_GREEN LV_COLOR_MAKE(0x00, 0x80, 0x00)
-#define LV_COLOR_CYAN LV_COLOR_MAKE(0x00, 0xFF, 0xFF)
-#define LV_COLOR_AQUA LV_COLOR_CYAN
-#define LV_COLOR_TEAL LV_COLOR_MAKE(0x00, 0x80, 0x80)
-#define LV_COLOR_BLUE LV_COLOR_MAKE(0x00, 0x00, 0xFF)
-#define LV_COLOR_NAVY LV_COLOR_MAKE(0x00, 0x00, 0x80)
-#define LV_COLOR_MAGENTA LV_COLOR_MAKE(0xFF, 0x00, 0xFF)
-#define LV_COLOR_PURPLE LV_COLOR_MAKE(0x80, 0x00, 0x80)
-#define LV_COLOR_ORANGE LV_COLOR_MAKE(0xFF, 0xA5, 0x00)
-lv_obj_t *mainGUI(void);
-lv_obj_t *hour = NULL;
-lv_obj_t *minute = NULL;
-lv_obj_t *second = NULL;
-lv_obj_t *year = NULL;
-lv_obj_t *month = NULL;
-lv_obj_t *week = NULL;
-lv_obj_t *day = NULL;
-lv_obj_t *state = NULL;
+#define CASE_MAIN_GUI 1
+#define CASE_SETUP_GUI 6
+#define CASE_CALENDAR 5
 
 static void but_implement(lv_event_t *event)
 {
     lv_obj_t *btn = lv_event_get_target(event);
     lv_obj_t *obj = lv_obj_get_parent(btn);
 
-    switch ((int)event->user_data) {
-    case 1: {
+    switch ((int)event->user_data)
+    {
+    case CASE_MAIN_GUI:
+    case 2:
+    case 3:
+    case 10:
         mainGUI();
+        // fall through
+    case 4:
         lv_obj_del_delayed(obj, 1);
         second = NULL;
-    }
-    break;
-    case 2: {
-        lv_obj_del_delayed(obj, 1);
-        mainGUI();
-        second = NULL;
-    }
-    break;
-    case 3: {
-        lv_obj_del_delayed(obj, 1);
-        mainGUI();
-        second = NULL;
-    }
-    break;
-    case 4: {
-        lv_obj_del_delayed(obj, 1);
-    }
-    break;
-    case 5: {
-        lv_obj_del_delayed(obj, 1);
+        break;
+    case CASE_CALENDAR:
         lv_example_calendar_1(NULL);
-    }
-    break;
-    case 6: {
-        lv_obj_del_delayed(obj, 1);
+        // fall through
+    case CASE_SETUP_GUI:
         setupGUI();
-    }
-    break;
-    case 10: {
-        lv_obj_del_delayed(obj, 1);
-        mainGUI();
-    }
-    break;
+        // fall through
     default:
+        lv_obj_del_delayed(obj, 1);
         break;
     }
 }
@@ -455,9 +357,11 @@ static void event_handler(lv_event_t *e)
     lv_event_code_t code = lv_event_get_code(e);
     lv_obj_t *obj = lv_event_get_current_target(e);
 
-    if (code == LV_EVENT_VALUE_CHANGED) {
+    if (code == LV_EVENT_VALUE_CHANGED)
+    {
         lv_calendar_date_t date;
-        if (lv_calendar_get_pressed_date(obj, &date)) {
+        if (lv_calendar_get_pressed_date(obj, &date))
+        {
             LV_LOG_USER("Clicked date: %02d.%02d.%d", date.day, date.month, date.year);
         }
     }
@@ -465,7 +369,7 @@ static void event_handler(lv_event_t *e)
 
 void lv_example_calendar_1(lv_obj_t *parent)
 {
-    //lv_obj_t * obj = lv_obj_create(lv_layer_top());
+    // lv_obj_t * obj = lv_obj_create(lv_layer_top());
     lv_obj_t *obj = lv_obj_create(parent);
     lv_obj_set_size(obj, 240, 240);
     lv_obj_align(obj, LV_ALIGN_CENTER, 0, 0);
@@ -473,27 +377,29 @@ void lv_example_calendar_1(lv_obj_t *parent)
     lv_obj_set_style_border_width(obj, 0, 0);
     lv_obj_set_style_pad_all(obj, 0, 0);
 
-    lv_obj_t   *calendar = lv_calendar_create(obj);
+    lv_obj_t *calendar = lv_calendar_create(obj);
     lv_obj_set_size(calendar, 240, 185);
     lv_obj_align(calendar, LV_ALIGN_CENTER, 0, 25);
     lv_obj_add_event_cb(calendar, event_handler, LV_EVENT_ALL, NULL);
 
-    lv_calendar_set_today_date(calendar, 2021, 02, 23);
-    lv_calendar_set_showed_date(calendar, 2021, 02);
+    // Get current date from RTC
+    RTC_DateTime now = watch.getDateTime();
+    lv_calendar_set_today_date(calendar, now.year, now.month, now.day);
+    lv_calendar_set_showed_date(calendar, now.year, now.month);
 
     /*Highlight a few days*/
-    static lv_calendar_date_t highlighted_days[3];       /*Only its pointer will be saved so should be static*/
-    highlighted_days[0].year = 2021;
-    highlighted_days[0].month = 02;
-    highlighted_days[0].day = 6;
+    static lv_calendar_date_t highlighted_days[3]; /*Only its pointer will be saved so should be static*/
+    highlighted_days[0].year = now.year;
+    highlighted_days[0].month = now.month;
+    highlighted_days[0].day = now.day;
 
-    highlighted_days[1].year = 2021;
-    highlighted_days[1].month = 02;
-    highlighted_days[1].day = 11;
+    highlighted_days[1].year = now.year;
+    highlighted_days[1].month = now.month;
+    highlighted_days[1].day = (now.day + 5) % 28 + 1;
 
-    highlighted_days[2].year = 2022;
-    highlighted_days[2].month = 02;
-    highlighted_days[2].day = 22;
+    highlighted_days[2].year = now.year;
+    highlighted_days[2].month = now.month;
+    highlighted_days[2].day = (now.day + 10) % 28 + 1;
 
     lv_calendar_set_highlighted_dates(calendar, highlighted_days, 3);
 
@@ -503,7 +409,7 @@ void lv_example_calendar_1(lv_obj_t *parent)
     lv_calendar_header_arrow_create(calendar);
 #endif
 
-    lv_calendar_set_showed_date(calendar, show_timeinfo.tm_year + 1900, show_timeinfo.tm_mon + 1);
+    lv_calendar_set_showed_date(calendar, show_timeinfo.tm_year + 2024, show_timeinfo.tm_mon + 1);
 }
 
 lv_obj_t *dot = NULL;
@@ -521,21 +427,21 @@ lv_obj_t *setupGUI()
     lv_obj_set_style_pad_all(view, 0, 0);
     lv_obj_set_size(view, 240, 240);
     lv_obj_set_style_bg_color(view, lv_color_hex(0xffffff), 0);
-    //lv_obj_add_style(view, &cont_style, 0);
+    // lv_obj_add_style(view, &cont_style, 0);
 
     static lv_style_t onestyle;
     lv_style_init(&onestyle);
     lv_style_set_text_color(&onestyle, LV_COLOR_BLACK);
     // lv_style_set_text_font(&onestyle, &fn1_32);  //Due to upgrading the lvgl version, the font is invalid and replaced with ordinary fonts.
     lv_style_set_text_font(&onestyle, &lv_font_montserrat_24);
-    
-    //Upper left corner logo
+
+    // Upper left corner logo
     lv_obj_t *casio = lv_label_create(view);
     lv_obj_add_style(casio, &onestyle, 0);
     lv_label_set_text(casio, "LilyGo");
     lv_obj_align(casio, LV_ALIGN_TOP_LEFT, 10, 10);
 
-    //Upper right corner model
+    // Upper right corner model
     static lv_style_t model_style;
     lv_style_init(&model_style);
     lv_style_set_text_color(&model_style, LV_COLOR_BLACK);
@@ -543,38 +449,38 @@ lv_obj_t *setupGUI()
     lv_style_set_text_font(&onestyle, &lv_font_montserrat_28);
 
     lv_obj_t *model = lv_label_create(view);
-    lv_obj_add_style(model,  &model_style, 0);
+    lv_obj_add_style(model, &model_style, 0);
     lv_label_set_text(model, "ESP32-S3");
     lv_obj_align(model, LV_ALIGN_TOP_RIGHT, -10, 15);
 
-    //Line style
+    // Line style
     static lv_style_t line_style;
     lv_style_init(&line_style);
     lv_style_set_line_color(&line_style, LV_COLOR_BLACK);
     lv_style_set_line_width(&line_style, 2);
     lv_style_set_line_rounded(&line_style, 1);
 
-    //Top horizontal line
-    static lv_point_t line_points[] = { {10, 0}, {230, 0} };
+    // Top horizontal line
+    static lv_point_t line_points[] = {{10, 0}, {230, 0}};
     lv_obj_t *line1;
     line1 = lv_line_create(view);
-    lv_line_set_points(line1, line_points, 2);     /*Set the points*/
+    lv_line_set_points(line1, line_points, 2); /*Set the points*/
     lv_obj_add_style(line1, &line_style, 0);
     lv_obj_align(line1, LV_ALIGN_TOP_MID, 0, 45);
 
-    //Bottom horizontal line left
-    static lv_point_t line_points1[] = { {0, 0}, {75, 0} };
+    // Bottom horizontal line left
+    static lv_point_t line_points1[] = {{0, 0}, {75, 0}};
     lv_obj_t *line2;
     line2 = lv_line_create(view);
-    lv_line_set_points(line2, line_points1, 2);     /*Set the points*/
-    lv_obj_add_style(line2,  &line_style, 0);
+    lv_line_set_points(line2, line_points1, 2); /*Set the points*/
+    lv_obj_add_style(line2, &line_style, 0);
     lv_obj_align(line2, LV_ALIGN_BOTTOM_LEFT, 10, -30);
 
     //! Bottom line right
-    static lv_point_t line_points2[] = { {0, 0}, {75, 0} };
+    static lv_point_t line_points2[] = {{0, 0}, {75, 0}};
     lv_obj_t *line3;
     line3 = lv_line_create(view);
-    lv_line_set_points(line3, line_points2, 2);     /*Set the points*/
+    lv_line_set_points(line3, line_points2, 2); /*Set the points*/
     lv_obj_add_style(line3, &line_style, 0);
     lv_obj_align(line3, LV_ALIGN_BOTTOM_RIGHT, -10, -30);
 
@@ -606,25 +512,25 @@ lv_obj_t *setupGUI()
     lv_img_set_src(img3, &arrow_right_png);
     lv_obj_align_to(img3, line3, LV_ALIGN_OUT_TOP_RIGHT, 0, -5);
 
-    //Intermediate clock time division font
+    // Intermediate clock time division font
     static lv_style_t time_style;
     lv_style_init(&time_style);
     lv_style_set_text_color(&time_style, LV_COLOR_BLACK);
     // lv_style_set_text_font(&time_style,  &digital_play_st_48);//Due to upgrading the lvgl version, the font is invalid and replaced with ordinary fonts.
     lv_style_set_text_font(&time_style, &lv_font_montserrat_48);
-    //lv_style_set_text_align(&time_style, LV_ALIGN_RIGHT_MID);
+    // lv_style_set_text_align(&time_style, LV_ALIGN_RIGHT_MID);
     lv_style_set_text_letter_space(&time_style, 5);
 
     hour = lv_label_create(view);
     lv_obj_add_style(hour, &time_style, 0);
-    char hour_t[30] = { 0 };
-    sprintf(hour_t, "%02d", show_timeinfo.tm_hour + 6 >= 24 ? show_timeinfo.tm_hour + 6 - 24 : show_timeinfo.tm_hour + 6);
+    char hour_t[30] = {0};
+    sprintf(hour_t, "%02d", show_timeinfo.tm_hour);
     lv_label_set_text(hour, hour_t);
-    //lv_obj_align_to(hour, view, LV_ALIGN_CENTER, -50, 10);
+    // lv_obj_align_to(hour, view, LV_ALIGN_CENTER, -50, 10);
     lv_obj_set_pos(hour, 8, 90);
     lv_obj_set_size(hour, 100, 50);
     lv_obj_set_style_text_align(hour, LV_TEXT_ALIGN_RIGHT, 0);
-    //semicolon
+    // semicolon
     static lv_style_t dot_style;
     lv_style_init(&dot_style);
     lv_style_set_text_color(&dot_style, LV_COLOR_BLACK);
@@ -636,17 +542,17 @@ lv_obj_t *setupGUI()
     lv_label_set_text(dot, ":");
     lv_obj_align_to(dot, hour, LV_ALIGN_OUT_RIGHT_MID, 5, 0);
 
-    //minute
+    // minute
     minute = lv_label_create(view);
     lv_obj_add_style(minute, &time_style, 0);
-    char minute_t[30] = { 0 };
+    char minute_t[30] = {0};
     sprintf(minute_t, "%02d", show_timeinfo.tm_min);
     lv_label_set_text(minute, minute_t);
     lv_obj_set_size(minute, 90, 50);
     lv_obj_align_to(minute, dot, LV_ALIGN_OUT_RIGHT_MID, 5, 0);
     lv_obj_set_style_text_align(minute, LV_TEXT_ALIGN_LEFT, 0);
 
-    //Intermediate clock second digit
+    // Intermediate clock second digit
     static lv_style_t second_style;
     lv_style_init(&second_style);
     lv_style_set_text_color(&second_style, LV_COLOR_BLACK);
@@ -655,13 +561,13 @@ lv_obj_t *setupGUI()
 
     second = lv_label_create(view);
     lv_obj_add_style(second, &second_style, 0);
-    char second_t[30] = { 0 };
+    char second_t[30] = {0};
     sprintf(second_t, "%02d", show_timeinfo.tm_sec);
     lv_label_set_text(second, second_t);
     lv_obj_set_size(second, 32, 32);
     lv_obj_align_to(second, minute, LV_ALIGN_OUT_RIGHT_BOTTOM, -12, 13);
 
-    //date
+    // date
     static lv_style_t year_style;
     lv_style_init(&year_style);
     lv_style_set_text_color(&year_style, LV_COLOR_BLACK);
@@ -670,12 +576,12 @@ lv_obj_t *setupGUI()
 
     year = lv_label_create(view);
     lv_obj_add_style(year, &year_style, 0);
-    char year_t[30] = { 0 };
+    char year_t[30] = {0};
     sprintf(year_t, "%04d", show_timeinfo.tm_year + 1900);
     lv_label_set_text(year, year_t);
     lv_obj_align_to(year, view, LV_ALIGN_CENTER, 0, 55);
 
-    //Chinese font
+    // Chinese font
     static lv_style_t chinese_style;
     lv_style_init(&chinese_style);
     lv_style_set_text_color(&chinese_style, LV_COLOR_BLACK);
@@ -690,13 +596,20 @@ lv_obj_t *setupGUI()
     state = lv_label_create(view);
     lv_obj_add_style(state, &chinese_style, 0);
     int hour_temp = show_timeinfo.tm_hour + 6 >= 24 ? show_timeinfo.tm_hour + 6 - 24 : show_timeinfo.tm_hour + 6;
-    if (hour_temp >= 8 && hour_temp < 11) {
+    if (hour_temp >= 8 && hour_temp < 11)
+    {
         lv_label_set_text(state, "a.m.");
-    } else if (hour_temp >= 11 && hour_temp <= 13) {
+    }
+    else if (hour_temp >= 11 && hour_temp <= 13)
+    {
         lv_label_set_text(state, "mid");
-    } else if (hour_temp >= 14 && hour_temp <= 17) {
+    }
+    else if (hour_temp >= 14 && hour_temp <= 17)
+    {
         lv_label_set_text(state, "p.m.");
-    } else {
+    }
+    else
+    {
         lv_label_set_text(state, "night");
     }
     lv_obj_align_to(state, year, LV_ALIGN_OUT_RIGHT_MID, 5, 0);
@@ -708,15 +621,18 @@ lv_obj_t *setupGUI()
 
     day = lv_label_create(view);
     lv_obj_add_style(day, &year_style, 0);
-    char date_t[30] = { 0 };
+    char date_t[30] = {0};
     sprintf(date_t, "%02d", show_timeinfo.tm_mday);
     lv_label_set_text(day, date_t);
     lv_obj_align_to(day, week, LV_ALIGN_OUT_RIGHT_MID, 10, 0);
 
     //! Battery string
-    lv_obj_t *bat_text = lv_label_create(view);
+    bat_text = lv_label_create(view);
     lv_obj_add_style(bat_text, &text_style, 0);
-    lv_label_set_text(bat_text, "BAT");
+    float voltage = watch.getBattVoltage() / 1000.0f;
+    char voltage_text[10];
+    //sprintf(voltage_text, "%.1fV", voltage);
+    lv_label_set_text(bat_text, voltage_text);
     lv_obj_align_to(bat_text, view, LV_ALIGN_LEFT_MID, 20, -40);
 
     // temperature
@@ -725,33 +641,42 @@ lv_obj_t *setupGUI()
     lv_style_set_text_color(&temp_style, LV_COLOR_BLACK);
     // lv_style_set_text_font(&temp_style, &quostige_16);//Due to upgrading the lvgl version, the font is invalid and replaced with ordinary fonts.
     lv_style_set_text_font(&temp_style, &lv_font_montserrat_16);
-
-
-    lv_obj_t *temp_text = lv_label_create(view);
+    float temp = watch.readCoreTemp();
+    temp_text = lv_label_create(view);
     lv_obj_add_style(temp_text, &temp_style, 0);
-    lv_label_set_text(temp_text, "24*C");
+    char temp_text_value[10];
+    sprintf(temp_text_value, "%d°C", (int)temp);
+    lv_label_set_text(temp_text, temp_text_value);
     lv_obj_align_to(temp_text, bat_text, LV_ALIGN_OUT_BOTTOM_MID, 0, -5);
 
-    //Power
+    // Power
     static lv_style_t bat_style;
     lv_style_init(&bat_style);
     lv_style_set_text_color(&bat_style, LV_COLOR_BLACK);
     // lv_style_set_text_font(&bat_style, &digital_play_st_24);//Due to upgrading the lvgl version, the font is invalid and replaced with ordinary fonts.
     lv_style_set_text_font(&bat_style, &lv_font_montserrat_16);
 
-    lv_obj_t *bat = lv_label_create(view);
+    bat = lv_label_create(view);
     lv_obj_add_style(bat, &bat_style, 0);
-    lv_label_set_text(bat, "100%");
+    float percentage = watch.getBatteryPercent();
+    char percentage_text[10];
+    sprintf(percentage_text, "%d%%", (int)percentage);
+    lv_label_set_text(bat, percentage_text);
     lv_obj_align_to(bat, view, LV_ALIGN_CENTER, -35, -35);
 
-
     static lv_point_t line_points3[] = {
-        {0, 0}, {50, 0},
-        {50, 30}, {50, 30},
-        {50, 35}, {35, 39},
-        {35, 39}, {15, 39},
-        {15, 39}, {0, 35},
-        {0, 35}, {0, 0},
+        {0, 0},
+        {50, 0},
+        {50, 30},
+        {50, 30},
+        {50, 35},
+        {35, 39},
+        {35, 39},
+        {15, 39},
+        {15, 39},
+        {0, 35},
+        {0, 35},
+        {0, 0},
     };
 
     lv_obj_t *line4;
@@ -766,7 +691,6 @@ lv_obj_t *setupGUI()
     lv_style_set_text_color(&key_style, LV_COLOR_BLACK);
     // lv_style_set_text_font(&key_style, &gracetians_32);
     lv_style_set_text_font(&key_style, &lv_font_montserrat_32);
-
     lv_obj_t *key = lv_label_create(view);
     lv_obj_add_style(key, &key_style, 0);
     lv_label_set_text(key, "Go");
@@ -794,115 +718,40 @@ lv_obj_t *setupGUI()
     return view;
 }
 
-void wav_task(void *param)
-{
-    String music_path;
-
-    uint32_t time_pos;
-
-
-    while (1) {
-        EventBits_t bit = xEventGroupGetBits(global_event_group);
-        if (bit) {
-            if (bit & RING_PAUSE) {
-                xEventGroupClearBits(global_event_group, RING_PAUSE);
-                is_pause = !is_pause;
-            }
-            if (bit & RING_STOP) {
-                xEventGroupClearBits(global_event_group, RING_STOP);
-                mp3->stop();
-                suspend_playMP3Handler();
-                is_pause = false;
-            }
-            if (bit & WAV_RING_1) {
-                xEventGroupClearBits(global_event_group, WAV_RING_1);
-                // if (!audio->isRunning()) {
-                mp3->stop();
-                suspend_playMP3Handler();
-                //mp3->connecttoFS(SPIFFS, "/ring_1.mp3");
-                // Serial.println("play \"/ring_1.mp3\"");
-                is_pause = false;
-                // }
-            }
-        }
-        if (xQueueReceive(play_music_queue, &music_path, 0)) {
-            Serial.print("play ");
-            Serial.println(music_path.c_str());
-            mp3->stop();
-            if (!strcmp("ring_1.mp3", music_path.c_str())) {
-                resume_playMP3Handler();
-                //my_print("xQueueReceive if\n");
-                //vTaskSuspend(playWAVHandler);
-                vTaskSuspend(playMP3Handler);
-                //vTaskSuspend(playFLACHandler);
-                //vTaskSuspend(playACCHandler);
-                //file->open(mp3_ring_1, mp3_ring_1_len);
-                file->open(mp3_array, sizeof(mp3_array)/sizeof(mp3_array[0]));
-                //file->open(AUDIO_DATA, sizeof(AUDIO_DATA));
-                mp3->begin(id3, out);
-                vTaskResume(playMP3Handler);
-            } else {
-                resume_playMP3Handler();
-                //my_print("xQueueReceive else\n");
-                //vTaskSuspend(playWAVHandler);
-                vTaskSuspend(playMP3Handler);
-                // vTaskSuspend(playFLACHandler);
-                //vTaskSuspend(playACCHandler);
-                file->open(mp3_ring_setup, sizeof(mp3_ring_setup)/sizeof(mp3_ring_setup[0]));
-                mp3->begin(id3, out);
-                vTaskResume(playMP3Handler);
-            }
-
-            //audio->connecttoFS(SD_MMC, music_path.c_str());
-            is_pause = false;
-        }
-        if (xQueueReceive(play_time_queue, &time_pos, 0)) {
-            //audio->setAudioPlayPosition(time_pos);
-        }
-        /*if (audio->isRunning() && Millis - millis() > 100) {
-            music_time = audio->getAudioCurrentTime();
-            lv_msg_send(MSG_MUSIC_TIME_ID, &music_time);
-
-            //end_time = mp3->getTotalPlayingTime();
-            lv_msg_send(MSG_MUSIC_TIME_END_ID, &end_time);
-            Millis = millis();
-        }*/
-        /*if (!is_pause)
-        {
-            //my_print("!is_pause\n");
-            mp3->loop();
-        }*/
-        delay(1);
-    }
-}
+// Removed unused wav_task function - queue handling is done in loop() function
 
 lv_obj_t *mainGUI(void)
 {
     ui_init();
-
+    //app_alarm_load(lv_scr_act());
     return NULL;
 }
 
 void PMUHandler()
 {
-    if (pmuIrq) {
+    if (pmuIrq)
+    {
         pmuIrq = false;
         watch.readPMU();
-        if (watch.isVbusInsertIrq()) {
+        if (watch.isVbusInsertIrq())
+        {
             Serial.println("isVbusInsert");
             watch.incrementalBrightness(brightnessLevel);
             usbPlugIn = true;
         }
-        if (watch.isVbusRemoveIrq()) {
+        if (watch.isVbusRemoveIrq())
+        {
             Serial.println("isVbusRemove");
             destoryChargeUI();
             watch.incrementalBrightness(brightnessLevel);
             usbPlugIn = false;
         }
-        if (watch.isBatChagerDoneIrq()) {
+        if (watch.isBatChagerDoneIrq())
+        {
             Serial.println("isBatChagerDone");
         }
-        if (watch.isBatChagerStartIrq()) {
+        if (watch.isBatChagerStartIrq())
+        {
             Serial.println("isBatChagerStart");
         }
         // Clear watch Interrupt Status Register
@@ -912,30 +761,37 @@ void PMUHandler()
 
 void SensorHandler()
 {
-    if (sportsIrq) {
+    if (sportsIrq)
+    {
         sportsIrq = false;
         // The interrupt status must be read after an interrupt is detected
         uint16_t status = watch.readBMA();
         Serial.printf("Accelerometer interrupt mask : 0x%x\n", status);
 
-        if (watch.isPedometer()) {
+        if (watch.isPedometer())
+        {
             stepCounter = watch.getPedometerCounter();
             Serial.printf("Step count interrupt,step Counter:%u\n", stepCounter);
 
-            if (step_counter_label != NULL) {
+            if (step_counter_label != NULL)
+            {
                 lv_label_set_text_fmt(step_counter_label, "%u", stepCounter);
             }
         }
-        if (watch.isActivity()) {
+        if (watch.isActivity())
+        {
             Serial.println("Activity interrupt");
         }
-        if (watch.isTilt()) {
+        if (watch.isTilt())
+        {
             Serial.println("Tilt interrupt");
         }
-        if (watch.isDoubleTap()) {
+        if (watch.isDoubleTap())
+        {
             Serial.println("DoubleTap interrupt");
         }
-        if (watch.isAnyNoMotion()) {
+        if (watch.isAnyNoMotion())
+        {
             Serial.println("Any motion / no motion interrupt");
         }
     }
@@ -948,7 +804,7 @@ void setSportsFlag()
 
 void settingSensor()
 {
-    //Default 4G ,200HZ
+    // Default 4G ,200HZ
     watch.configAccelerometer();
 
     watch.enableAccelerometer();
@@ -958,11 +814,11 @@ void settingSensor()
     watch.configInterrupt();
 
     watch.enableFeature(SensorBMA423::FEATURE_STEP_CNTR |
-                        SensorBMA423::FEATURE_ANY_MOTION |
-                        SensorBMA423::FEATURE_NO_MOTION |
-                        SensorBMA423::FEATURE_ACTIVITY |
-                        SensorBMA423::FEATURE_TILT |
-                        SensorBMA423::FEATURE_WAKEUP,
+                            SensorBMA423::FEATURE_ANY_MOTION |
+                            SensorBMA423::FEATURE_NO_MOTION |
+                            SensorBMA423::FEATURE_ACTIVITY |
+                            SensorBMA423::FEATURE_TILT |
+                            SensorBMA423::FEATURE_WAKEUP,
                         true);
 
     watch.enablePedometerIRQ();
@@ -987,9 +843,9 @@ void settingPMU()
     // Enable the required interrupt function
     watch.enableIRQ(
         // XPOWERS_AXP2101_BAT_INSERT_IRQ    | XPOWERS_AXP2101_BAT_REMOVE_IRQ      |   //BATTERY
-        XPOWERS_AXP2101_VBUS_INSERT_IRQ   | XPOWERS_AXP2101_VBUS_REMOVE_IRQ     |   //VBUS
-        XPOWERS_AXP2101_PKEY_SHORT_IRQ    | XPOWERS_AXP2101_PKEY_LONG_IRQ       |  //POWER KEY
-        XPOWERS_AXP2101_BAT_CHG_DONE_IRQ  | XPOWERS_AXP2101_BAT_CHG_START_IRQ       //CHARGE
+        XPOWERS_AXP2101_VBUS_INSERT_IRQ | XPOWERS_AXP2101_VBUS_REMOVE_IRQ |  // VBUS
+        XPOWERS_AXP2101_PKEY_SHORT_IRQ | XPOWERS_AXP2101_PKEY_LONG_IRQ |     // POWER KEY
+        XPOWERS_AXP2101_BAT_CHG_DONE_IRQ | XPOWERS_AXP2101_BAT_CHG_START_IRQ // CHARGE
         // XPOWERS_AXP2101_PKEY_NEGATIVE_IRQ | XPOWERS_AXP2101_PKEY_POSITIVE_IRQ   |   //POWER KEY
     );
     watch.attachPMU(setPMUFlag);
@@ -1004,48 +860,57 @@ void settingRadio()
 {
 #ifdef USING_TWATCH_S3
     // set carrier frequency to 868.0 MHz
-    if (watch.setFrequency(868.0) == RADIOLIB_ERR_INVALID_FREQUENCY) {
+    if (watch.setFrequency(868.0) == RADIOLIB_ERR_INVALID_FREQUENCY)
+    {
         Serial.println(F("Selected frequency is invalid for this module!"));
     }
 
     // set bandwidth to 250 kHz
-    if (watch.setBandwidth(250.0) == RADIOLIB_ERR_INVALID_BANDWIDTH) {
+    if (watch.setBandwidth(250.0) == RADIOLIB_ERR_INVALID_BANDWIDTH)
+    {
         Serial.println(F("Selected bandwidth is invalid for this module!"));
     }
 
     // set spreading factor to 10
-    if (watch.setSpreadingFactor(10) == RADIOLIB_ERR_INVALID_SPREADING_FACTOR) {
+    if (watch.setSpreadingFactor(10) == RADIOLIB_ERR_INVALID_SPREADING_FACTOR)
+    {
         Serial.println(F("Selected spreading factor is invalid for this module!"));
     }
 
     // set coding rate to 6
-    if (watch.setCodingRate(6) == RADIOLIB_ERR_INVALID_CODING_RATE) {
+    if (watch.setCodingRate(6) == RADIOLIB_ERR_INVALID_CODING_RATE)
+    {
         Serial.println(F("Selected coding rate is invalid for this module!"));
     }
 
     // set LoRa sync word to 0xAB
-    if (watch.setSyncWord(0xAB) != RADIOLIB_ERR_NONE) {
+    if (watch.setSyncWord(0xAB) != RADIOLIB_ERR_NONE)
+    {
         Serial.println(F("Unable to set sync word!"));
     }
 
     // set output power to 10 dBm (accepted range is -17 - 22 dBm)
-    if (watch.setOutputPower(22) == RADIOLIB_ERR_INVALID_OUTPUT_POWER) {
+    if (watch.setOutputPower(22) == RADIOLIB_ERR_INVALID_OUTPUT_POWER)
+    {
         Serial.println(F("Selected output power is invalid for this module!"));
     }
 
     // set over current protection limit to 140 mA (accepted range is 45 - 140 mA)
     // NOTE: set value to 0 to disable overcurrent protection
-    if (watch.setCurrentLimit(140) == RADIOLIB_ERR_INVALID_CURRENT_LIMIT) {
+    if (watch.setCurrentLimit(140) == RADIOLIB_ERR_INVALID_CURRENT_LIMIT)
+    {
         Serial.println(F("Selected current limit is invalid for this module!"));
     }
 
     // set LoRa preamble length to 15 symbols (accepted range is 0 - 65535)
-    if (watch.setPreambleLength(15) == RADIOLIB_ERR_INVALID_PREAMBLE_LENGTH) {
+    if (watch.setPreambleLength(15) == RADIOLIB_ERR_INVALID_PREAMBLE_LENGTH)
+    {
         Serial.println(F("Selected preamble length is invalid for this module!"));
     }
 
     // disable CRC
-    if (watch.setCRC(false) == RADIOLIB_ERR_INVALID_CRC_CONFIGURATION) {
+    if (watch.setCRC(false) == RADIOLIB_ERR_INVALID_CRC_CONFIGURATION)
+    {
         Serial.println(F("Selected CRC is invalid for this module!"));
     }
 
@@ -1053,18 +918,22 @@ void settingRadio()
     // when new packet is received
     watch.setDio1Action(setRadioFlag);
 #endif
-
 }
 
 void playerTask(void *params)
 {
 #ifdef ENABLE_PLAYER
-    while (1) {
-        if (player_task_cb) {
-            if (!player_task_cb()) {
+    while (1)
+    {
+        if (player_task_cb)
+        {
+            if (!player_task_cb())
+            {
                 vTaskSuspend(NULL);
             }
-        } else {
+        }
+        else
+        {
             vTaskSuspend(NULL);
         }
         delay(5);
@@ -1075,8 +944,10 @@ void playerTask(void *params)
 static bool playMP3()
 {
 #ifdef ENABLE_PLAYER
-    if (mp3->isRunning()) {
-        if (!mp3->loop()) {
+    if (mp3->isRunning())
+    {
+        if (!mp3->loop())
+        {
             mp3->stop();
             return false;
         }
@@ -1112,9 +983,11 @@ void vadTask(void *params)
 {
 #ifdef ENABLE_PLAYER
     vTaskSuspend(vadTaskHandler);
-    while (1) {
+    while (1)
+    {
         size_t read_len = 0;
-        if (watch.readMicrophone((char *) vad_buff, vad_buffer_size, &read_len)) {
+        if (watch.readMicrophone((char *)vad_buff, vad_buffer_size, &read_len))
+        {
             /*           // Feed samples to the VAD process and get the result
             #if   ESP_IDF_VERSION_VAL(4,4,1) == ESP_IDF_VERSION
                        vad_state_t vad_state = vad_process(vad_inst, vad_buff);
@@ -1123,7 +996,8 @@ void vadTask(void *params)
             #else
             #error "No support this version."
             #endif*/
-            if (chart != NULL) {
+            if (chart != NULL)
+            {
                 lv_chart_series_t *ser1 = lv_chart_add_series(chart, lv_palette_main(LV_PALETTE_RED), LV_CHART_AXIS_PRIMARY_Y);
                 lv_chart_set_ext_y_array(chart, ser1, (lv_coord_t *)vad_buff);
             }
@@ -1145,7 +1019,6 @@ void settingPlayer()
 {
 #ifdef ENABLE_PLAYER
     file = new AudioFileSourcePROGMEM(AUDIO_DATA, sizeof(AUDIO_DATA));
-    //file = new AudioFileSourcePROGMEM();
     id3 = new AudioFileSourceID3(file);
     out = new AudioOutputI2S(1, AudioOutputI2S::EXTERNAL_I2S);
     out->SetPinout(BOARD_DAC_IIS_BCK, BOARD_DAC_IIS_WS, BOARD_DAC_IIS_DOUT);
@@ -1161,16 +1034,18 @@ void settingPlayer()
 #endif
 
     // Initialize esp-sr vad detected
-#if ESP_IDF_VERSION_VAL(4,4,1) == ESP_IDF_VERSION
+#if ESP_IDF_VERSION_VAL(4, 4, 1) == ESP_IDF_VERSION
     vad_inst = vad_create(VAD_MODE_0, MIC_I2S_SAMPLE_RATE, VAD_FRAME_LENGTH_MS);
-#elif  ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(4,4,1)
+#elif ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(4, 4, 1)
     vad_inst = vad_create(VAD_MODE_0);
 #else
 #error "No support this version."
 #endif
     vad_buff = (int16_t *)ps_malloc(vad_buffer_size);
-    if (vad_buff == NULL) {
-        while (1) {
+    if (vad_buff == NULL)
+    {
+        while (1)
+        {
             Serial.println("Memory allocation failed!");
             delay(1000);
         }
@@ -1192,7 +1067,8 @@ static bool CreateWAV(const char *song_name, uint32_t duration, uint16_t num_cha
     uint32_t data_size = sampling_rate * num_channels * bits_per_sample * duration / 8;
 
     File new_audio_file = SPIFFS.open(song_name, FILE_WRITE);
-    if (!new_audio_file) {
+    if (!new_audio_file)
+    {
         Serial.println("Failed to create file");
         return false;
     }
@@ -1206,8 +1082,7 @@ static bool CreateWAV(const char *song_name, uint32_t duration, uint16_t num_cha
         (uint8_t)(chunk_size),
         (uint8_t)(chunk_size >> 8),
         (uint8_t)(chunk_size >> 16),
-        (uint8_t)(chunk_size >> 24)
-    };
+        (uint8_t)(chunk_size >> 24)};
     new_audio_file.write(CHUNK_SIZE, 4);
 
     uint8_t FORMAT[4] = {'W', 'A', 'V', 'E'};
@@ -1224,16 +1099,14 @@ static bool CreateWAV(const char *song_name, uint32_t duration, uint16_t num_cha
 
     uint8_t NUM_CHANNELS[2] = {
         (uint8_t)num_channels,
-        (uint8_t)(num_channels >> 8)
-    };
+        (uint8_t)(num_channels >> 8)};
     new_audio_file.write(NUM_CHANNELS, 2);
 
     uint8_t SAMPLING_RATE[4] = {
         (uint8_t)(sampling_rate),
         (uint8_t)(sampling_rate >> 8),
         (uint8_t)(sampling_rate >> 16),
-        (uint8_t)(sampling_rate >> 24)
-    };
+        (uint8_t)(sampling_rate >> 24)};
     new_audio_file.write(SAMPLING_RATE, 4);
 
     uint32_t byte_rate = num_channels * sampling_rate * bits_per_sample / 8;
@@ -1241,21 +1114,18 @@ static bool CreateWAV(const char *song_name, uint32_t duration, uint16_t num_cha
         (uint8_t)byte_rate,
         (uint8_t)(byte_rate >> 8),
         (uint8_t)(byte_rate >> 16),
-        (uint8_t)(byte_rate >> 24)
-    };
+        (uint8_t)(byte_rate >> 24)};
     new_audio_file.write(BYTE_RATE, 4);
 
     uint16_t block_align = num_channels * bits_per_sample / 8;
     uint8_t BLOCK_ALIGN[2] = {
         (uint8_t)block_align,
-        (uint8_t)(block_align >> 8)
-    };
+        (uint8_t)(block_align >> 8)};
     new_audio_file.write(BLOCK_ALIGN, 2);
 
     uint8_t BITS_PER_SAMPLE[2] = {
         (uint8_t)bits_per_sample,
-        (uint8_t)(bits_per_sample >> 8)
-    };
+        (uint8_t)(bits_per_sample >> 8)};
     new_audio_file.write(BITS_PER_SAMPLE, 2);
 
     uint8_t SUBCHUNK_2_ID[4] = {'d', 'a', 't', 'a'};
@@ -1265,8 +1135,7 @@ static bool CreateWAV(const char *song_name, uint32_t duration, uint16_t num_cha
         (uint8_t)(data_size),
         (uint8_t)(data_size >> 8),
         (uint8_t)(data_size >> 16),
-        (uint8_t)(data_size >> 24)
-    };
+        (uint8_t)(data_size >> 24)};
     new_audio_file.write(SUBCHUNK_2_SIZE, 4);
 
     new_audio_file.close();
@@ -1275,18 +1144,17 @@ static bool CreateWAV(const char *song_name, uint32_t duration, uint16_t num_cha
 
 void printLocalTime()
 {
-    if (!getLocalTime(&timeinfo)) {
-        Serial.println("No time available (yet)");
-        return;
-    }
-    show_timeinfo.tm_year = timeinfo.tm_year;
-    show_timeinfo.tm_hour = timeinfo.tm_hour;
-    show_timeinfo.tm_mon = timeinfo.tm_mon;
-    show_timeinfo.tm_min = timeinfo.tm_min;
-    show_timeinfo.tm_wday = timeinfo.tm_wday;
-    show_timeinfo.tm_mday = timeinfo.tm_mday;
-    show_timeinfo.tm_sec = timeinfo.tm_sec;
-    Serial.println(&timeinfo, "%A, %B %d %Y %H:%M:%S");
+    // Always use RTC time for display (more accurate and persists across reboots)
+    struct tm rtc_timeinfo;
+    watch.getDateTime(&rtc_timeinfo);  // getDateTime() returns void, fills the struct
+    // Use RTC time directly
+    show_timeinfo.tm_year = rtc_timeinfo.tm_year;
+    show_timeinfo.tm_hour = rtc_timeinfo.tm_hour;
+    show_timeinfo.tm_mon = rtc_timeinfo.tm_mon;
+    show_timeinfo.tm_min = rtc_timeinfo.tm_min;
+    show_timeinfo.tm_wday = rtc_timeinfo.tm_wday;
+    show_timeinfo.tm_mday = rtc_timeinfo.tm_mday;
+    show_timeinfo.tm_sec = rtc_timeinfo.tm_sec;
 }
 
 // Callback function (get's called when time adjusts via NTP)
@@ -1294,6 +1162,9 @@ void timeavailable(struct timeval *t)
 {
     Serial.println("Got time adjustment from NTP!");
     printLocalTime();
+    // Write synchronized time to hardware RTC
+    watch.hwClockWrite();
+    Serial.println("RTC updated with NTP time");
     WiFi.disconnect();
 }
 
@@ -1316,32 +1187,9 @@ void wifi_test(void)
     lv_label_set_long_mode(log_label, LV_LABEL_LONG_SCROLL);
     lv_label_set_recolor(log_label, true);
     lv_obj_set_style_text_color(log_label, lv_color_hex(0xffffff), 0);
-    lv_label_set_text(log_label, "Scan WiFi");
-    LV_DELAY(1);
-    WiFi.mode(WIFI_STA);
-    WiFi.disconnect();
-    LV_DELAY(100);
-    int n = WiFi.scanNetworks();
-    Serial.println("scan done");
-    if (n == 0) {
-        text = "no networks found";
-    } else {
-        text = n;
-        text += " networks found\n";
-        for (int i = 0; i < n; ++i) {
-            text += (i + 1);
-            text += ": ";
-            text += WiFi.SSID(i);
-            text += " (";
-            text += WiFi.RSSI(i);
-            text += ")";
-            text += (WiFi.encryptionType(i) == WIFI_AUTH_OPEN) ? " \n" : "*\n";
-            delay(10);
-        }
-    }
-    lv_label_set_text(log_label, text.c_str());
-    Serial.println(text);
-    LV_DELAY(2000);
+    
+    //Serial.println(text);
+    //LV_DELAY(2000);
     text = "Connecting to ";
     Serial.print("Connecting to ");
     text += WIFI_SSID;
@@ -1352,12 +1200,14 @@ void wifi_test(void)
 
     bool is_smartconfig_connect = false;
     lv_label_set_long_mode(log_label, LV_LABEL_LONG_WRAP);
-    while (WiFi.status() != WL_CONNECTED) {
+    while (WiFi.status() != WL_CONNECTED)
+    {
         Serial.print(".");
         text += ".";
         lv_label_set_text(log_label, text.c_str());
         LV_DELAY(100);
-        if (millis() - last_tick > WIFI_CONNECT_WAIT_MAX) {
+        if (millis() - last_tick > WIFI_CONNECT_WAIT_MAX)
+        {
             /* Automatically start smartconfig when connection times out */
             text += "\nConnection timed out, start smartconfig";
             lv_label_set_text(log_label, text.c_str());
@@ -1370,9 +1220,11 @@ void wifi_test(void)
                     "distribution network";
             lv_label_set_text(log_label, text.c_str());
             WiFi.beginSmartConfig();
-            while (1) {
+            while (1)
+            {
                 LV_DELAY(100);
-                if (WiFi.smartConfigDone()) {
+                if (WiFi.smartConfigDone())
+                {
                     Serial.println("\r\nSmartConfig Success\r\n");
                     Serial.printf("SSID:%s\r\n", WiFi.SSID().c_str());
                     Serial.printf("PSW:%s\r\n", WiFi.psk().c_str());
@@ -1389,7 +1241,8 @@ void wifi_test(void)
             }
         }
     }
-    if (!is_smartconfig_connect) {
+    if (!is_smartconfig_connect)
+    {
         text += "\nCONNECTED \nTakes ";
         Serial.print("\n CONNECTED \nTakes ");
         text += millis() - last_tick;
@@ -1398,45 +1251,68 @@ void wifi_test(void)
         Serial.println(" millseconds");
         lv_label_set_text(log_label, text.c_str());
     }
-    LV_DELAY(2000);
+    LV_DELAY(1000);
 }
 
 int printLocalTime_cont = 0;
 
 void renew_ui_time(void)
 {
-    char temp[30] = { 0 };
+    char temp[30] = {0};
 
-    if (show_timeinfo_old.tm_sec != show_timeinfo.tm_sec) {
+    // Always use RTC time for display
+    struct tm rtc_timeinfo;
+    watch.getDateTime(&rtc_timeinfo);  // getDateTime() returns void, fills the struct
+    // Use RTC time
+    show_timeinfo.tm_year = rtc_timeinfo.tm_year;
+    show_timeinfo.tm_hour = rtc_timeinfo.tm_hour;
+    show_timeinfo.tm_mon = rtc_timeinfo.tm_mon;
+    show_timeinfo.tm_min = rtc_timeinfo.tm_min;
+    show_timeinfo.tm_wday = rtc_timeinfo.tm_wday;
+    show_timeinfo.tm_mday = rtc_timeinfo.tm_mday;
+    show_timeinfo.tm_sec = rtc_timeinfo.tm_sec;
+
+    if (show_timeinfo_old.tm_sec != show_timeinfo.tm_sec)
+    {
         show_timeinfo_old.tm_sec = show_timeinfo.tm_sec;
         sprintf(temp, "%02d", show_timeinfo.tm_sec);
         lv_label_set_text(second, temp);
     }
 
-    if (show_timeinfo_old.tm_min != show_timeinfo.tm_min) {
+    if (show_timeinfo_old.tm_min != show_timeinfo.tm_min)
+    {
         show_timeinfo_old.tm_min = show_timeinfo.tm_min;
         sprintf(temp, "%02d", show_timeinfo.tm_min);
         lv_label_set_text(minute, temp);
         lv_obj_align_to(second, minute, LV_ALIGN_OUT_RIGHT_BOTTOM, -12, 13);
     }
 
-    if (show_timeinfo_old.tm_hour != show_timeinfo.tm_hour) {
-        int hour_temp = show_timeinfo.tm_hour + 6 >= 24 ? show_timeinfo.tm_hour + 6 - 24 : show_timeinfo.tm_hour + 6;
+    if (show_timeinfo_old.tm_hour != show_timeinfo.tm_hour)
+    {
+        int hour_temp = show_timeinfo.tm_hour;
         show_timeinfo_old.tm_hour = show_timeinfo.tm_hour;
         sprintf(temp, "%02d", hour_temp);
         lv_label_set_text(hour, temp);
-        if (hour_temp >= 8 && hour_temp < 11) {
+        if (hour_temp >= 8 && hour_temp < 11)
+        {
             lv_label_set_text(state, "a.m.");
-        } else if (hour_temp >= 11 && hour_temp <= 13) {
+        }
+        else if (hour_temp >= 11 && hour_temp <= 13)
+        {
             lv_label_set_text(state, "mid");
-        } else if (hour_temp >= 14 && hour_temp <= 17) {
+        }
+        else if (hour_temp >= 14 && hour_temp <= 17)
+        {
             lv_label_set_text(state, "p.m.");
-        } else {
+        }
+        else
+        {
             lv_label_set_text(state, "night");
         }
     }
 
-    if (show_timeinfo_old.tm_mday != show_timeinfo.tm_mday) {
+    if (show_timeinfo_old.tm_mday != show_timeinfo.tm_mday)
+    {
         sprintf(temp, "%04d", show_timeinfo.tm_year + 1900);
         lv_label_set_text(year, temp);
 
@@ -1448,10 +1324,32 @@ void renew_ui_time(void)
         lv_label_set_text(day, temp);
     }
 }
+void renew_ui_bat(void)
+{
+    float voltage = watch.getBattVoltage() / 1000.0f;
+    char voltage_text[10];
+    sprintf(voltage_text, "%.1fV", voltage);
+    lv_label_set_text(bat_text, voltage_text);
+
+    float percentage = watch.getBatteryPercent();
+    char percentage_text[10];
+    sprintf(percentage_text, "%d%%", (int)percentage);
+    lv_label_set_text(bat, percentage_text);
+}
+
+void updateTimeTask(void *parameter)
+{
+    for (;;)
+    {
+        renew_ui_time();
+        vTaskDelay(1000 / portTICK_PERIOD_MS); // Delay for 1 second
+    }
+}
 
 void destoryChargeUI()
 {
-    if (!charge_cont) {
+    if (!charge_cont)
+    {
         return;
     }
     lv_obj_del(charge_cont);
@@ -1461,7 +1359,8 @@ void destoryChargeUI()
 static void PDM_Record(const char *song_name, uint32_t duration)
 {
     // Add wav header to the file so we can play it from PC later
-    if (!CreateWAV(song_name, duration, 1, MIC_I2S_SAMPLE_RATE, MIC_I2S_BITS_PER_SAMPLE)) {
+    if (!CreateWAV(song_name, duration, 1, MIC_I2S_SAMPLE_RATE, MIC_I2S_BITS_PER_SAMPLE))
+    {
         Serial.println("Error during wav header creation");
         return;
     }
@@ -1471,14 +1370,16 @@ static void PDM_Record(const char *song_name, uint32_t duration)
     // Buffer to receive data from microphone
     const size_t BUFFER_SIZE = 500;
     uint8_t *buf = (uint8_t *)malloc(BUFFER_SIZE);
-    if (!buf) {
+    if (!buf)
+    {
         Serial.println("Failed to alloc memory");
         return;
     }
 
     // Open created .wav file in append+binary mode to add PCM data
     File audio_file = SPIFFS.open(song_name, FILE_APPEND);
-    if (!audio_file) {
+    if (!audio_file)
+    {
         Serial.println("Failed to create file");
         return;
     }
@@ -1492,7 +1393,8 @@ static void PDM_Record(const char *song_name, uint32_t duration)
     Serial.println("Recording started");
     int percentage = 0;
 
-    while (counter != data_size) {
+    while (counter != data_size)
+    {
 
         percentage = ((float)counter / (float)data_size) * 100;
         Serial.print(percentage);
@@ -1501,21 +1403,24 @@ static void PDM_Record(const char *song_name, uint32_t duration)
         lv_msg_send(LVGL_MESSAGE_PROGRESS_CHANGED_ID, &percentage);
 
         // Check for file size overflow
-        if (counter > data_size) {
+        if (counter > data_size)
+        {
             Serial.println("File is corrupted. data_size must be multiple of BUFFER_SIZE. Please modify BUFFER_SIZE");
             break;
         }
 
         // Read data from microphone
-        if (!watch.readMicrophone(buf, BUFFER_SIZE, &bytes_written)) {
+        if (!watch.readMicrophone(buf, BUFFER_SIZE, &bytes_written))
+        {
             Serial.println("readMicrophone() error");
         }
 
-        if (bytes_written != BUFFER_SIZE) {
+        if (bytes_written != BUFFER_SIZE)
+        {
             Serial.println("Bytes written error");
         }
         // Save data to SPIFFS
-        audio_file.write( buf, BUFFER_SIZE);
+        audio_file.write(buf, BUFFER_SIZE);
         // Increment the counter
         counter += BUFFER_SIZE;
 
@@ -1538,52 +1443,69 @@ void lowPowerEnergyHandler()
     watch.clearPMU();
 
     watch.configreFeatureInterrupt(
-        SensorBMA423::INT_STEP_CNTR |   // Pedometer interrupt
-        SensorBMA423::INT_ACTIVITY |    // Activity interruption
-        SensorBMA423::INT_TILT |        // Tilt interrupt
-        // SensorBMA423::INT_WAKEUP |      // DoubleTap interrupt
-        SensorBMA423::INT_ANY_NO_MOTION,// Any  motion / no motion interrupt
+        SensorBMA423::INT_STEP_CNTR |    // Pedometer interrupt
+            SensorBMA423::INT_ACTIVITY | // Activity interruption
+            SensorBMA423::INT_TILT |     // Tilt interrupt
+            //SensorBMA423::INT_WAKEUP |      // DoubleTap interrupt
+            SensorBMA423::INT_ANY_NO_MOTION, // Any  motion / no motion interrupt
         false);
 
     sportsIrq = false;
     pmuIrq = false;
-    //lv_timer_pause(transmitTask);
+    // lv_timer_pause(transmitTask);
 
-    //TODO: Low power consumption not debugged
-    if (lightSleep) {
+    // TODO: Low power consumption not debugged
+    if (lightSleep)
+    {
         esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
         // esp_sleep_enable_ext1_wakeup(1ULL << BOARD_BMA423_INT1, ESP_EXT1_WAKEUP_ANY_HIGH);
         // esp_sleep_enable_ext1_wakeup(1ULL << BOARD_PMU_INT, ESP_EXT1_WAKEUP_ALL_LOW);
 
-        gpio_wakeup_enable ((gpio_num_t)BOARD_PMU_INT, GPIO_INTR_LOW_LEVEL);
-        gpio_wakeup_enable ((gpio_num_t)BOARD_BMA423_INT1, GPIO_INTR_HIGH_LEVEL);
-        esp_sleep_enable_gpio_wakeup ();
-        esp_light_sleep_start();
-    } else {
+        gpio_wakeup_enable((gpio_num_t)BOARD_PMU_INT, GPIO_INTR_LOW_LEVEL);
+        gpio_wakeup_enable((gpio_num_t)BOARD_BMA423_INT1, GPIO_INTR_HIGH_LEVEL);
+         // Enable double tap interrupt
+        watch.configreFeatureInterrupt(SensorBMA423::INT_WAKEUP, true);
+        gpio_wakeup_enable((gpio_num_t)BOARD_BMA423_INT1, GPIO_INTR_HIGH_LEVEL);
 
-        // setCpuFrequencyMhz(10);
-        // setCpuFrequencyMhz(80);
-        //my_print("=========esp_light_sleep_start=========\n");
-        while (!pmuIrq && !sportsIrq && !watch.getTouched()) {
-            delay(300);
+        // Enable accelerometer interrupt
+        watch.configreFeatureInterrupt(SensorBMA423::INT_ACTIVITY, true);
+        gpio_wakeup_enable((gpio_num_t)BOARD_BMA423_INT1, GPIO_INTR_HIGH_LEVEL);
+
+        esp_sleep_enable_gpio_wakeup();
+        esp_light_sleep_start();
+    }
+    else
+    {
+
+         //setCpuFrequencyMhz(10);
+         WiFi.mode(WIFI_OFF);
+         //setCpuFrequencyMhz(80);
+        // my_print("=========esp_light_sleep_start=========\n");
+        while (!pmuIrq && !sportsIrq && !watch.getTouched())
+        {
+            delay(300); 
+            Serial.println(".");
             // gpio_wakeup_enable ((gpio_num_t)BOARD_TOUCH_INT, GPIO_INTR_LOW_LEVEL);
             // esp_sleep_enable_timer_wakeup(3 * 1000);
             // esp_light_sleep_start();
         }
-        //my_print("=========esp_light_sleep_end=========\n");
-        // setCpuFrequencyMhz(240);
+        // my_print("=========esp_light_sleep_end=========\n");
+         // setCpuFrequencyMhz(240);
     }
-
+    watch.setWaveform(2, 15);
+    watch.run();
+    LV_DELAY(1000);
+    watch.stop();
     // Clear Interrupts in Loop
     // watch.readBMA();
     // watch.clearPMU();
 
     watch.configreFeatureInterrupt(
-        SensorBMA423::INT_STEP_CNTR |   // Pedometer interrupt
-        SensorBMA423::INT_ACTIVITY |    // Activity interruption
-        SensorBMA423::INT_TILT |        // Tilt interrupt
-        // SensorBMA423::INT_WAKEUP |      // DoubleTap interrupt
-        SensorBMA423::INT_ANY_NO_MOTION,// Any  motion / no motion interrupt
+        SensorBMA423::INT_STEP_CNTR |    // Pedometer interrupt
+            SensorBMA423::INT_ACTIVITY | // Activity interruption
+            SensorBMA423::INT_TILT |     // Tilt interrupt
+            // SensorBMA423::INT_WAKEUP |      // DoubleTap interrupt
+            SensorBMA423::INT_ANY_NO_MOTION, // Any  motion / no motion interrupt
         true);
 
     lv_disp_trig_activity(NULL);
@@ -1594,36 +1516,62 @@ void lowPowerEnergyHandler()
 void loop()
 {
     lv_task_handler();
-    delay(5);
-    // SensorHandler();
-    // PMUHandler();
+    SensorHandler();
+    PMUHandler();
+    check_alarm(); // Check if alarm should trigger
+    if (standby_en)
+    {
+        printLocalTime_cont++;
+        if (printLocalTime_cont >= 20 && second != NULL)
+        {
+            printLocalTime_cont = 0;
+            printLocalTime();
+            renew_ui_time();
+            renew_ui_bat();
+        }      
+    }
 
-    // get_BattVoltage();
+    if (((lv_disp_get_inactive_time(NULL) >= 30000) && standby_en))
+    {
+        lowPowerEnergyHandler();
+        standby_en = 0;
+    }
+    else if ((lv_disp_get_inactive_time(NULL) < 30000) && !standby_en)
+    {
+        standby_en = 1;
+    }
 
-    // if (standby_en) {
-    //     printLocalTime_cont++;
-    //     if (printLocalTime_cont >= 20 && second != NULL) {
-    //         printLocalTime_cont = 0;
-    //         printLocalTime();
-    //         renew_ui_time();
-    //     }
+    std::string *pStr;
+    if (xQueueReceive(play_music_queue, &pStr, (TickType_t)10))
+    {
+        String key = pStr->c_str();
+        auto it = arrayMap.find(key);
+        if (it != arrayMap.end())
+        {
+            const unsigned char *array = it->second;
+            size_t array_size = arraySizeMap[key];
+            file->open(array, array_size);
+            id3 = new AudioFileSourceID3(file);
+            out = new AudioOutputI2S(1, AudioOutputI2S::EXTERNAL_I2S);
+            out->SetPinout(BOARD_DAC_IIS_BCK, BOARD_DAC_IIS_WS, BOARD_DAC_IIS_DOUT);
+            out->SetGain(0.2);
+            mp3 = new AudioGeneratorMP3();
 
-    //     if (recordFlag) {
-    //         recordFlag = false;
-    //         PDM_Record(DEFAULT_RECORD_FILENAME, 8);
-    //         canScreenOff = true;
-    //         lv_disp_trig_activity(NULL);
-    //     }
-    // }
+            // Start playing the file
+            mp3->begin(id3, out);
 
-    // if (((lv_disp_get_inactive_time(NULL) >= 10000) && standby_en)) {
-    //     lowPowerEnergyHandler();
-    //     standby_en = 0;
-    // } else if ((lv_disp_get_inactive_time(NULL) < 10000) && !standby_en) {
-    //     standby_en = 1;
-    // }
+            // Keep the music playing
+            while (mp3->isRunning())
+            {
+                if (!mp3->loop())
+                    mp3->stop();
+            }
+        }        
+        delete pStr; // Don't forget to delete the string when you're done with it
+    }
+    
+    
 }
-
 uint32_t lastMillis;
 static const char *chg_status[] = {
     "Tri ",
@@ -1631,12 +1579,13 @@ static const char *chg_status[] = {
     "Constant current",
     "Constant voltage",
     "Charge done",
-    "No charge"
-};
+    "No charge"};
 void get_BattVoltage(void)
 {
-    if (batt_voltage_label != NULL) {
-        if (lastMillis < millis()) {
+    if (batt_voltage_label != NULL)
+    {
+        if (lastMillis < millis())
+        {
             uint8_t charge_status = watch.getChargerStatus();
             lv_label_set_text_fmt(batt_voltage_label, "Charging:%s\nDischarge:%s\nUSB PlugIn:%s\nCHG state:%s\nBattery Voltage:%u mV\nUSB Voltage:%u mV\nSYS Voltage:%u mV\nBattery Percent:%d%%",
                                   watch.isCharging() ? "#00ff00 YES" : "#ff0000 NO",
@@ -1646,8 +1595,7 @@ void get_BattVoltage(void)
                                   watch.getBattVoltage(),
                                   watch.getVbusVoltage(),
                                   watch.getSystemVoltage(),
-                                  watch.getBatteryPercent()
-                                 );
+                                  watch.getBatteryPercent());
             lastMillis = millis() + 1000;
         }
     }
@@ -1656,12 +1604,17 @@ void get_BattVoltage(void)
 void playWavTask(void *prarms)
 {
     vTaskSuspend(NULL);
-    while (1) {
-        if (wav->isRunning()) {
-            if (!wav->loop()) {
+    while (1)
+    {
+        if (wav->isRunning())
+        {
+            if (!wav->loop())
+            {
                 wav->stop();
             }
-        } else {
+        }
+        else
+        {
             vTaskSuspend(NULL);
         }
         delay(2);
@@ -1672,14 +1625,20 @@ void playWavTask(void *prarms)
 void playMP3Task(void *prarms)
 {
     vTaskSuspend(NULL);
-    while (1) {
-        if (!is_pause) {
-            if (mp3->isRunning()) {
-                if (!mp3->loop()) {
+    while (1)
+    {
+        if (!is_pause)
+        {
+            if (mp3->isRunning())
+            {
+                if (!mp3->loop())
+                {
                     mp3->stop();
                     suspend_playMP3Handler();
                 }
-            } else {
+            }
+            else
+            {
                 vTaskSuspend(NULL);
             }
             delay(2);
@@ -1691,12 +1650,17 @@ void playMP3Task(void *prarms)
 void playFLACTask(void *prarms)
 {
     vTaskSuspend(NULL);
-    while (1) {
-        if (flac->isRunning()) {
-            if (!flac->loop()) {
+    while (1)
+    {
+        if (flac->isRunning())
+        {
+            if (!flac->loop())
+            {
                 flac->stop();
             }
-        } else {
+        }
+        else
+        {
             vTaskSuspend(NULL);
         }
         delay(2);
@@ -1707,12 +1671,17 @@ void playFLACTask(void *prarms)
 void playACCTask(void *prarms)
 {
     vTaskSuspend(NULL);
-    while (1) {
-        if (aac->isRunning()) {
-            if (!aac->loop()) {
+    while (1)
+    {
+        if (aac->isRunning())
+        {
+            if (!aac->loop())
+            {
                 aac->stop();
             }
-        } else {
+        }
+        else
+        {
             vTaskSuspend(NULL);
         }
         delay(2);
@@ -1720,7 +1689,7 @@ void playACCTask(void *prarms)
     vTaskDelete(NULL);
 }
 
-#define BUFFER_SIZE (2*1024)
+#define BUFFER_SIZE (2 * 1024)
 uint8_t buffer[BUFFER_SIZE] = {0};
 
 lv_chart_series_t *ser1;
@@ -1734,30 +1703,36 @@ void radio_power_cb(lv_event_t *e)
     Serial.printf("Option: %s id:%u\n", buf, id);
 
     bool isRunning = !transmitTask->paused;
-    if (isRunning) {
+    if (isRunning)
+    {
         lv_timer_pause(transmitTask);
         watch.standby();
     }
 
     uint8_t dBm[] = {
-        2, 5, 10, 12, 17, 20, 22
-    };
-    if (id > sizeof(dBm) / sizeof(dBm[0])) {
+        2, 5, 10, 12, 17, 20, 22};
+    if (id > sizeof(dBm) / sizeof(dBm[0]))
+    {
         Serial.println("invalid dBm params!");
         return;
     }
     // set output power (accepted range is - 17 - 22 dBm)
-    if (watch.setOutputPower(dBm[id]) == RADIOLIB_ERR_INVALID_OUTPUT_POWER) {
+    if (watch.setOutputPower(dBm[id]) == RADIOLIB_ERR_INVALID_OUTPUT_POWER)
+    {
         Serial.println(F("Selected output power is invalid for this module!"));
     }
 
-    if (transmitFlag) {
+    if (transmitFlag)
+    {
         watch.startTransmit("");
-    } else {
+    }
+    else
+    {
         watch.startReceive();
     }
 
-    if (isRunning) {
+    if (isRunning)
+    {
         lv_timer_resume(transmitTask);
     }
 }
@@ -1766,18 +1741,23 @@ void radioTask(lv_timer_t *parent)
 {
     char buf[256];
     // check if the previous operation finished
-    if (radioTransmitFlag) {
+    if (radioTransmitFlag)
+    {
         // reset flag
         radioTransmitFlag = false;
 
-        if (transmitFlag) {
-            //TX
-            // the previous operation was transmission, listen for response
-            // print the result
-            if (transmissionState == RADIOLIB_ERR_NONE) {
+        if (transmitFlag)
+        {
+            // TX
+            //  the previous operation was transmission, listen for response
+            //  print the result
+            if (transmissionState == RADIOLIB_ERR_NONE)
+            {
                 // packet was successfully sent
                 Serial.println(F("transmission finished!"));
-            } else {
+            }
+            else
+            {
                 Serial.print(F("failed, code "));
                 Serial.println(transmissionState);
             }
@@ -1785,14 +1765,17 @@ void radioTask(lv_timer_t *parent)
             lv_snprintf(buf, 256, "[%u]:Tx %s", lv_tick_get() / 1000, transmissionState == RADIOLIB_ERR_NONE ? "Successed" : "Failed");
             set_text_radio_ta(buf);
             transmissionState = watch.startTransmit("Hello World!");
-        } else {
+        }
+        else
+        {
             // RX
             // the previous operation was reception
             // print data and send another packet
             String str;
             int state = watch.readData(str);
 
-            if (state == RADIOLIB_ERR_NONE) {
+            if (state == RADIOLIB_ERR_NONE)
+            {
                 // packet was successfully received
                 Serial.println(F("[SX1262] Received packet!"));
 
@@ -1825,7 +1808,8 @@ void radio_rxtx_cb(lv_event_t *e)
     lv_dropdown_get_selected_str(obj, buf, sizeof(buf));
     uint32_t id = lv_dropdown_get_selected(obj);
     Serial.printf("Option: %s id:%u\n", buf, id);
-    switch (id) {
+    switch (id)
+    {
     case 0:
         lv_timer_resume(transmitTask);
         // TX
@@ -1839,9 +1823,12 @@ void radio_rxtx_cb(lv_event_t *e)
         lv_timer_resume(transmitTask);
         // RX
         Serial.print(F("[Radio] Starting to listen ... "));
-        if (watch.startReceive() == RADIOLIB_ERR_NONE) {
+        if (watch.startReceive() == RADIOLIB_ERR_NONE)
+        {
             Serial.println(F("success!"));
-        } else {
+        }
+        else
+        {
             Serial.println(F("failed "));
         }
         transmitFlag = false;
@@ -1849,7 +1836,8 @@ void radio_rxtx_cb(lv_event_t *e)
 
         break;
     case 2:
-        if (!transmitTask->paused) {
+        if (!transmitTask->paused)
+        {
             set_text_radio_ta("Radio has disable.");
             lv_timer_pause(transmitTask);
             watch.standby();
@@ -1870,29 +1858,36 @@ void radio_bandwidth_cb(lv_event_t *e)
 
     // set carrier bandwidth
     const float bw[] = {125.0, 250.0, 500.0};
-    if (id > sizeof(bw) / sizeof(bw[0])) {
+    if (id > sizeof(bw) / sizeof(bw[0]))
+    {
         Serial.println("invalid bandwidth params!");
         return;
     }
 
     bool isRunning = !transmitTask->paused;
-    if (isRunning) {
+    if (isRunning)
+    {
         lv_timer_pause(transmitTask);
         watch.standby();
     }
 
     // set bandwidth
-    if (watch.setBandwidth(bw[id]) == RADIOLIB_ERR_INVALID_BANDWIDTH) {
+    if (watch.setBandwidth(bw[id]) == RADIOLIB_ERR_INVALID_BANDWIDTH)
+    {
         Serial.println(F("Selected bandwidth is invalid for this module!"));
     }
 
-    if (transmitFlag) {
+    if (transmitFlag)
+    {
         watch.startTransmit("");
-    } else {
+    }
+    else
+    {
         watch.startReceive();
     }
 
-    if (isRunning) {
+    if (isRunning)
+    {
         lv_timer_resume(transmitTask);
     }
 }
@@ -1907,27 +1902,34 @@ void radio_freq_cb(lv_event_t *e)
 
     // set carrier frequency
     const float freq[] = {433.0, 470.0, 868.0, 915.0, 923.0};
-    if (id > sizeof(freq) / sizeof(freq[0])) {
+    if (id > sizeof(freq) / sizeof(freq[0]))
+    {
         Serial.println("invalid params!");
         return;
     }
 
     bool isRunning = !transmitTask->paused;
-    if (isRunning) {
+    if (isRunning)
+    {
         lv_timer_pause(transmitTask);
     }
 
-    if (watch.setFrequency(freq[id]) == RADIOLIB_ERR_INVALID_FREQUENCY) {
+    if (watch.setFrequency(freq[id]) == RADIOLIB_ERR_INVALID_FREQUENCY)
+    {
         Serial.println(F("Selected frequency is invalid for this module!"));
     }
 
-    if (transmitFlag) {
+    if (transmitFlag)
+    {
         watch.startTransmit("");
-    } else {
+    }
+    else
+    {
         watch.startReceive();
     }
 
-    if (isRunning) {
+    if (isRunning)
+    {
         lv_timer_resume(transmitTask);
     }
 }
