@@ -103,35 +103,53 @@ BleCompositeHID::BleCompositeHID(std::string deviceName, std::string deviceManuf
 }
 
 void BleCompositeHID::begin(void) {
-    NimBLEDevice::init(deviceName);
-    NimBLEServer *pServer = NimBLEDevice::createServer();
-    pServer->setCallbacks(this);
+    if (!initialized) {
+        // First time initialization
+        NimBLEDevice::init(deviceName);
+        NimBLEServer *pServer = NimBLEDevice::createServer();
+        pServer->setCallbacks(this);
 
-    hid = new NimBLEHIDDevice(pServer);
-    inputKeyboard = hid->inputReport(KEYBOARD_ID);
-    outputKeyboard = hid->outputReport(KEYBOARD_ID);
-    inputMediaKeys = hid->inputReport(MEDIA_KEYS_ID);
-    inputMouse = hid->inputReport(MOUSE_ID);
+        hid = new NimBLEHIDDevice(pServer);
+        inputKeyboard = hid->inputReport(KEYBOARD_ID);
+        outputKeyboard = hid->outputReport(KEYBOARD_ID);
+        inputMediaKeys = hid->inputReport(MEDIA_KEYS_ID);
+        inputMouse = hid->inputReport(MOUSE_ID);
 
-    hid->manufacturer()->setValue(deviceManufacturer);
-    hid->pnp(0x02, 0x05ac, 0x820a, 0x0210);
-    hid->hidInfo(0x00, 0x01);
+        hid->manufacturer()->setValue(deviceManufacturer);
+        hid->pnp(0x02, 0x05ac, 0x820a, 0x0210);
+        hid->hidInfo(0x00, 0x01);
+        
+        NimBLEDevice::setSecurityAuth(true, true, true);
+        
+        hid->reportMap((uint8_t*)_hidReportDescriptor, sizeof(_hidReportDescriptor));
+        hid->startServices();
+
+        hid->setBatteryLevel(batteryLevel);
+        initialized = true;
+    }
     
-    NimBLEDevice::setSecurityAuth(true, true, true);
-    
-    hid->reportMap((uint8_t*)_hidReportDescriptor, sizeof(_hidReportDescriptor));
-    hid->startServices();
-
+    // Start or restart advertising
     NimBLEAdvertising *pAdvertising = NimBLEDevice::getAdvertising();
     pAdvertising->setAppearance(HID_KEYBOARD);
     pAdvertising->addServiceUUID(hid->hidService()->getUUID());
     pAdvertising->start();
-    
-    hid->setBatteryLevel(batteryLevel);
 }
 
 void BleCompositeHID::end(void) {
-    NimBLEDevice::deinit(true);
+    // Stop advertising
+    NimBLEAdvertising *pAdvertising = NimBLEDevice::getAdvertising();
+    if (pAdvertising) {
+        pAdvertising->stop();
+    }
+    
+    // Disconnect any connected clients
+    if (connected) {
+        NimBLEServer* pServer = NimBLEDevice::getServer();
+        if (pServer) {
+            // Disconnect all connected clients
+            pServer->disconnect(0);
+        }
+    }
 }
 
 void BleCompositeHID::delay_ms(uint64_t ms) {

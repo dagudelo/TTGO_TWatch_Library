@@ -8,6 +8,8 @@
 // Use shared composite HID instance from main file
 extern BleCompositeHID bleHID;
 static lv_obj_t *label1;
+static lv_obj_t *ble_status_label;
+static lv_timer_t *ble_status_timer;
 
 // Create the icon
 static struct
@@ -32,14 +34,34 @@ static void stop_event_cb(lv_event_t *e);
 static void forward_event_cb(lv_event_t *e);
 static void backward_event_cb(lv_event_t *e);
 static void button_event_cb(lv_event_t *e);
+static void update_ble_status(lv_timer_t *timer);
 
 void app_keyboard_load(lv_obj_t *cont)
 {
+  // Check if BLE is enabled
+  extern bool bleEnabled;
+  if (!bleEnabled) {
+    lv_obj_t *warning_label = lv_label_create(cont);
+    lv_label_set_text(warning_label, "BLE is disabled\nEnable it from\nmain screen");
+    lv_obj_set_style_text_align(warning_label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_center(warning_label);
+    return;
+  }
+  
   // BLE Status indicator at top
-  lv_obj_t *ble_status = lv_label_create(cont);
-  lv_label_set_text(ble_status, bleHID.isConnected() ? LV_SYMBOL_BLUETOOTH " Connected" : "#808080 " LV_SYMBOL_BLUETOOTH " Disconnected#");
-  lv_label_set_recolor(ble_status, true);
-  lv_obj_align(ble_status, LV_ALIGN_TOP_MID, 0, 5);
+  ble_status_label = lv_label_create(cont);
+  lv_label_set_recolor(ble_status_label, true);
+  lv_obj_align(ble_status_label, LV_ALIGN_TOP_MID, 0, 5);
+  
+  // Update status immediately
+  if (bleHID.isConnected()) {
+    lv_label_set_text(ble_status_label, "#0000FF " LV_SYMBOL_BLUETOOTH " Connected#");
+  } else {
+    lv_label_set_text(ble_status_label, "#808080 " LV_SYMBOL_BLUETOOTH " Disconnected#");
+  }
+  
+  // Create timer to update BLE status periodically
+  ble_status_timer = lv_timer_create(update_ble_status, 1000, NULL);
 
   // generate the ui
   keyboard_param.play = create_keyboard_btn(cont, LV_ALIGN_CENTER, -65, -45, LV_SYMBOL_PLAY, LV_PALETTE_GREEN);
@@ -72,12 +94,25 @@ void app_keyboard_load(lv_obj_t *cont)
   lv_label_set_text(label1, "Media Controls");
   lv_obj_set_width(label1, 150);
   lv_obj_set_style_text_align(label1, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_align(label1, LV_ALIGN_TOP_MID, 0, 10);                         // Align the label to the top of the container
+  lv_obj_align(label1, LV_ALIGN_BOTTOM_MID, 0, -10);                     // Align to bottom to avoid overlap
   lv_obj_set_style_bg_color(label1, lv_color_make(0x80, 0x80, 0x80), 0); // Set the background color to gray
+  lv_obj_set_style_bg_opa(label1, LV_OPA_50, 0);                         // Make semi-transparent
   lv_obj_set_style_shadow_color(label1, lv_color_black(), 0);            // Set the shadow color to black
   lv_obj_set_style_shadow_width(label1, 5, 0);                           // Set the shadow width
   lv_task_handler();
 }
+
+static void update_ble_status(lv_timer_t *timer)
+{
+  if (ble_status_label) {
+    if (bleHID.isConnected()) {
+      lv_label_set_text(ble_status_label, "#0000FF " LV_SYMBOL_BLUETOOTH " Connected#");
+    } else {
+      lv_label_set_text(ble_status_label, "#808080 " LV_SYMBOL_BLUETOOTH " Disconnected#");
+    }
+  }
+}
+
 static void update_label_task(lv_timer_t *timer)
 {
 }
@@ -156,8 +191,17 @@ static lv_obj_t *create_keyboard_btn(lv_obj_t *parent, lv_align_t align, lv_coor
   return btn;
 }
 
+void app_keyboard_exit(lv_obj_t *cont)
+{
+  if (ble_status_timer) {
+    lv_timer_del(ble_status_timer);
+    ble_status_timer = nullptr;
+  }
+  ble_status_label = nullptr;
+}
+
 app_t app_keyboard = {
     .setup_func_cb = app_keyboard_load,
-    .exit_func_cb = nullptr,
+    .exit_func_cb = app_keyboard_exit,
     .user_data = nullptr,
 };

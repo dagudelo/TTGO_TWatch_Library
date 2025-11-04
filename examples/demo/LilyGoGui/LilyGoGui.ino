@@ -76,6 +76,7 @@ TaskHandle_t playACCHandler;
 
 // Single composite HID device with keyboard and mouse capabilities
 BleCompositeHID bleHID("T-Watch HID", "LilyGo", 100);
+bool bleEnabled = true; // BLE is enabled by default
 extern lv_obj_t *step_counter_label;
 extern lv_obj_t *batt_voltage_label;
 extern lv_obj_t *chart;
@@ -413,6 +414,31 @@ void lv_example_calendar_1(lv_obj_t *parent)
 }
 
 lv_obj_t *dot = NULL;
+lv_obj_t *ble_toggle_btn = NULL;
+
+static void ble_toggle_event_cb(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    if (code == LV_EVENT_CLICKED)
+    {
+        bleEnabled = !bleEnabled;
+        lv_obj_t *label = lv_obj_get_child(ble_toggle_btn, 0);
+        
+        if (bleEnabled)
+        {
+            bleHID.begin();
+            lv_label_set_text(label, "#0000FF " LV_SYMBOL_BLUETOOTH "#");
+            Serial.println("BLE Enabled");
+        }
+        else
+        {
+            bleHID.end();
+            lv_label_set_text(label, "#808080 " LV_SYMBOL_BLUETOOTH "#");
+            Serial.println("BLE Disabled");
+        }
+    }
+}
+
 lv_obj_t *setupGUI()
 {
     static lv_style_t cont_style;
@@ -648,6 +674,23 @@ lv_obj_t *setupGUI()
     sprintf(temp_text_value, "%d°C", (int)temp);
     lv_label_set_text(temp_text, temp_text_value);
     lv_obj_align_to(temp_text, bat_text, LV_ALIGN_OUT_BOTTOM_MID, 0, -5);
+
+    // BLE Toggle Button
+    ble_toggle_btn = lv_btn_create(view);
+    lv_obj_set_size(ble_toggle_btn, 50, 50);
+    lv_obj_align(ble_toggle_btn, LV_ALIGN_LEFT_MID, 15, 40);
+    lv_obj_set_style_radius(ble_toggle_btn, 25, 0);
+    lv_obj_add_event_cb(ble_toggle_btn, ble_toggle_event_cb, LV_EVENT_CLICKED, NULL);
+    
+    lv_obj_t *ble_btn_label = lv_label_create(ble_toggle_btn);
+    lv_label_set_recolor(ble_btn_label, true);
+    if (bleEnabled) {
+        lv_label_set_text(ble_btn_label, "#0000FF " LV_SYMBOL_BLUETOOTH "#");
+    } else {
+        lv_label_set_text(ble_btn_label, "#808080 " LV_SYMBOL_BLUETOOTH "#");
+    }
+    lv_obj_center(ble_btn_label);
+    lv_obj_set_style_text_font(ble_btn_label, &lv_font_montserrat_24, 0);
 
     // Power
     static lv_style_t bat_style;

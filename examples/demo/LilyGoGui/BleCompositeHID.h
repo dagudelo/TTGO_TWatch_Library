@@ -30,6 +30,7 @@ private:
     std::string deviceManufacturer;
     uint8_t batteryLevel;
     bool connected = false;
+    bool initialized = false;
     
     // Keyboard state
     uint8_t _keyReport[8] = {0};
