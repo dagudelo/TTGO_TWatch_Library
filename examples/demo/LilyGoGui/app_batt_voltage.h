@@ -6,3 +6,5 @@
 extern app_t app_batt_voltage;
 
 void app_batt_voltage_load(lv_obj_t *cont);
+void app_batt_voltage_exit(lv_obj_t *cont);
+void app_batt_voltage_update();

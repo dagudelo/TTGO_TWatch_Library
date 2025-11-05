@@ -110,18 +110,23 @@ void app_mouse_load(lv_obj_t *cont)
   lv_obj_align(mode_label, LV_ALIGN_TOP_RIGHT, -5, 8);
   lv_obj_set_style_text_font(mode_label, &lv_font_montserrat_10, 0);
   
-  // BLE Status indicator (top-middle, below mode button to avoid overlap)
-  ble_status_label = lv_label_create(cont);
-  lv_label_set_recolor(ble_status_label, true);
-  lv_obj_align(ble_status_label, LV_ALIGN_TOP_MID, 0, 8);
-  lv_obj_set_style_text_font(ble_status_label, &lv_font_montserrat_10, 0);
+  // Combined status label in center - shows both BLE status and current action
+  center_label_static = lv_label_create(cont);
+  lv_label_set_long_mode(center_label_static, LV_LABEL_LONG_WRAP);
+  lv_label_set_recolor(center_label_static, true);
+  lv_obj_set_width(center_label_static, 180);
+  lv_obj_set_style_text_align(center_label_static, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_align(center_label_static, LV_ALIGN_CENTER, 0, 0);
   
-  // Update status immediately
+  // Set initial combined status
   if (bleHID.isConnected()) {
-    lv_label_set_text(ble_status_label, "#0000FF " LV_SYMBOL_BLUETOOTH "#");
+    lv_label_set_text(center_label_static, "#0000FF " LV_SYMBOL_BLUETOOTH " Connected#\nTouch Area");
   } else {
-    lv_label_set_text(ble_status_label, "#808080 " LV_SYMBOL_BLUETOOTH "#");
+    lv_label_set_text(center_label_static, "#808080 " LV_SYMBOL_BLUETOOTH " Disconnected#\nTouch Area");
   }
+  
+  // Keep reference for BLE updates (reuse center label)
+  ble_status_label = center_label_static;
   
   // Android navigation buttons at the bottom
   icon_param.btn_back = create_mouse_btn(cont, LV_ALIGN_BOTTOM_LEFT, 10, -10, LV_SYMBOL_LEFT);
@@ -155,15 +160,6 @@ void app_mouse_load(lv_obj_t *cont)
 
   */
 
-  // Main status/action label in the center
-  center_label_static = lv_label_create(cont);
-  lv_label_set_long_mode(center_label_static, LV_LABEL_LONG_WRAP);
-  lv_label_set_recolor(center_label_static, true);
-  lv_label_set_text(center_label_static, "Touch Area");
-  lv_obj_set_width(center_label_static, 150);
-  lv_obj_set_style_text_align(center_label_static, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_align(center_label_static, LV_ALIGN_CENTER, 0, 10);  // Slightly below center
-
   indev = lv_indev_get_next(NULL);
 
   timer = lv_timer_create(update_label_task, 100, NULL);
@@ -177,14 +173,14 @@ static void update_label_task(lv_timer_t *timer)
   static uint32_t last_status_update = 0;
   lv_point_t point = {0, 0};
   
-  // Update BLE status every second
+  // Update BLE status every second (only if not showing other action)
   uint32_t now = lv_tick_get();
-  if (now - last_status_update > 1000) {
-    if (ble_status_label) {
+  if (now - last_status_update > 1000 && indev->proc.state != LV_INDEV_STATE_PRESSED) {
+    if (center_label_static) {
       if (bleHID.isConnected()) {
-        lv_label_set_text(ble_status_label, "#0000FF " LV_SYMBOL_BLUETOOTH "#");
+        lv_label_set_text(center_label_static, "#0000FF " LV_SYMBOL_BLUETOOTH " Connected#\nTouch Area");
       } else {
-        lv_label_set_text(ble_status_label, "#808080 " LV_SYMBOL_BLUETOOTH "#");
+        lv_label_set_text(center_label_static, "#808080 " LV_SYMBOL_BLUETOOTH " Disconnected#\nTouch Area");
       }
     }
     last_status_update = now;

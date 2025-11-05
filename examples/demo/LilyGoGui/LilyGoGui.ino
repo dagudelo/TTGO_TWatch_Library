@@ -72,11 +72,20 @@ TaskHandle_t playACCHandler;
 #include "global_flags.h"
 #include "ui.h"
 #include "app_alarm.h"
+#include "app_batt_voltage.h"
 #include <driver/gpio.h>
 
 // Single composite HID device with keyboard and mouse capabilities
 BleCompositeHID bleHID("T-Watch HID", "LilyGo", 100);
 bool bleEnabled = true; // BLE is enabled by default
+bool wifiEnabled = true; // WiFi is enabled by default
+bool loraEnabled = false; // LoRa is disabled by default
+
+// Battery discharge tracking
+float last_battery_percent = -1.0f;
+unsigned long last_battery_time = 0;
+float discharge_rate_percent_per_hour = 0.0f;
+
 extern lv_obj_t *step_counter_label;
 extern lv_obj_t *batt_voltage_label;
 extern lv_obj_t *chart;
@@ -368,6 +377,133 @@ static void event_handler(lv_event_t *e)
     }
 }
 
+// Global calendar widget for numeric keyboard interaction
+static lv_obj_t *g_calendar = NULL;
+static lv_obj_t *g_calendar_parent = NULL;
+
+// Callback for numeric keyboard input
+static void calendar_keyboard_event_cb(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    lv_obj_t *kb = lv_event_get_target(e);
+    
+    if (code == LV_EVENT_READY || code == LV_EVENT_CANCEL) {
+        // Get the text area that was being edited
+        lv_obj_t *ta = (lv_obj_t *)lv_event_get_user_data(e);
+        
+        if (code == LV_EVENT_READY && ta && g_calendar) {
+            // Parse the input and update calendar
+            const char *text = lv_textarea_get_text(ta);
+            int value = atoi(text);
+            
+            // Determine if it's year, month, or day based on textarea user_data
+            const char *field = (const char *)lv_obj_get_user_data(ta);
+            
+            // Get current showed date
+            const lv_calendar_date_t *current_date = lv_calendar_get_showed_date(g_calendar);
+            lv_calendar_date_t date = *current_date;
+            
+            if (strcmp(field, "year") == 0 && value >= 2025 && value <= 2099) {
+                date.year = value;
+            } else if (strcmp(field, "month") == 0 && value >= 1 && value <= 12) {
+                date.month = value;
+            } else if (strcmp(field, "day") == 0 && value >= 1 && value <= 31) {
+                date.day = value;
+            }
+            
+            lv_calendar_set_showed_date(g_calendar, date.year, date.month);
+        }
+        
+        // Close keyboard and textarea
+        if (ta) lv_obj_del(ta);
+        lv_obj_del(kb);
+    }
+}
+
+// Create a numeric input for calendar field
+static void create_calendar_numeric_input(const char *field_name, int current_value)
+{
+    if (!g_calendar_parent) return;
+    
+    // Create textarea for number input
+    lv_obj_t *ta = lv_textarea_create(g_calendar_parent);
+    lv_obj_set_size(ta, 120, 40);
+    lv_obj_align(ta, LV_ALIGN_CENTER, 0, -60);
+    lv_textarea_set_one_line(ta, true);
+    lv_textarea_set_max_length(ta, 4);
+    
+    char buf[8];
+    sprintf(buf, "%d", current_value);
+    lv_textarea_set_text(ta, buf);
+    lv_obj_set_user_data(ta, (void *)field_name);
+    
+    // Create numeric keyboard
+    lv_obj_t *kb = lv_keyboard_create(g_calendar_parent);
+    lv_obj_set_size(kb, 240, 120);
+    lv_obj_align(kb, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_keyboard_set_mode(kb, LV_KEYBOARD_MODE_NUMBER);
+    lv_keyboard_set_textarea(kb, ta);
+    lv_obj_add_event_cb(kb, calendar_keyboard_event_cb, LV_EVENT_ALL, ta);
+}
+
+// Custom calendar header with click-to-edit functionality
+static void calendar_header_click_event_cb(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    if (code == LV_EVENT_CLICKED && g_calendar) {
+        lv_obj_t *btn = lv_event_get_target(e);
+        const char *field = (const char *)lv_obj_get_user_data(btn);
+        
+        const lv_calendar_date_t *current_date = lv_calendar_get_showed_date(g_calendar);
+        
+        if (strcmp(field, "year") == 0) {
+            create_calendar_numeric_input("year", current_date->year);
+        } else if (strcmp(field, "month") == 0) {
+            create_calendar_numeric_input("month", current_date->month);
+        }
+    }
+}
+
+// Custom calendar header with restricted year range (2025+)
+static lv_obj_t *custom_calendar_header_dropdown(lv_obj_t *calendar)
+{
+    lv_obj_t *header = lv_calendar_header_dropdown_create(calendar);
+    
+    // Get the year dropdown (it's the second child of the header)
+    uint32_t child_cnt = lv_obj_get_child_cnt(header);
+    if (child_cnt >= 2) {
+        lv_obj_t *year_dropdown = lv_obj_get_child(header, 1); // Year is typically second
+        
+        if (lv_obj_check_type(year_dropdown, &lv_dropdown_class)) {
+            // Create year list from 2025 to 2099
+            char year_options[2000] = "";
+            for (int y = 2025; y <= 2099; y++) {
+                char year_str[8];
+                sprintf(year_str, "%d\n", y);
+                strcat(year_options, year_str);
+            }
+            // Remove trailing newline
+            year_options[strlen(year_options) - 1] = '\0';
+            
+            lv_dropdown_set_options(year_dropdown, year_options);
+            
+            // Set current year
+            RTC_DateTime now = watch.getDateTime();
+            if (now.year >= 2025 && now.year <= 2099) {
+                lv_dropdown_set_selected(year_dropdown, now.year - 2025);
+            } else {
+                lv_dropdown_set_selected(year_dropdown, 0); // Default to 2025
+            }
+            
+            // Make it clickable for numeric keyboard
+            lv_obj_set_user_data(year_dropdown, (void *)"year");
+            lv_obj_add_flag(year_dropdown, LV_OBJ_FLAG_CLICKABLE);
+        }
+    }
+    
+    return header;
+}
+
 void lv_example_calendar_1(lv_obj_t *parent)
 {
     // lv_obj_t * obj = lv_obj_create(lv_layer_top());
@@ -378,15 +514,16 @@ void lv_example_calendar_1(lv_obj_t *parent)
     lv_obj_set_style_border_width(obj, 0, 0);
     lv_obj_set_style_pad_all(obj, 0, 0);
 
-    lv_obj_t *calendar = lv_calendar_create(obj);
-    lv_obj_set_size(calendar, 240, 185);
-    lv_obj_align(calendar, LV_ALIGN_CENTER, 0, 25);
-    lv_obj_add_event_cb(calendar, event_handler, LV_EVENT_ALL, NULL);
+    g_calendar_parent = obj;
+    g_calendar = lv_calendar_create(obj);
+    lv_obj_set_size(g_calendar, 240, 185);
+    lv_obj_align(g_calendar, LV_ALIGN_CENTER, 0, 25);
+    lv_obj_add_event_cb(g_calendar, event_handler, LV_EVENT_ALL, NULL);
 
     // Get current date from RTC
     RTC_DateTime now = watch.getDateTime();
-    lv_calendar_set_today_date(calendar, now.year, now.month, now.day);
-    lv_calendar_set_showed_date(calendar, now.year, now.month);
+    lv_calendar_set_today_date(g_calendar, now.year, now.month, now.day);
+    lv_calendar_set_showed_date(g_calendar, now.year, now.month);
 
     /*Highlight a few days*/
     static lv_calendar_date_t highlighted_days[3]; /*Only its pointer will be saved so should be static*/
@@ -402,15 +539,13 @@ void lv_example_calendar_1(lv_obj_t *parent)
     highlighted_days[2].month = now.month;
     highlighted_days[2].day = (now.day + 10) % 28 + 1;
 
-    lv_calendar_set_highlighted_dates(calendar, highlighted_days, 3);
+    lv_calendar_set_highlighted_dates(g_calendar, highlighted_days, 3);
 
 #if LV_USE_CALENDAR_HEADER_DROPDOWN
-    lv_calendar_header_dropdown_create(calendar);
+    custom_calendar_header_dropdown(g_calendar);
 #elif LV_USE_CALENDAR_HEADER_ARROW
-    lv_calendar_header_arrow_create(calendar);
+    lv_calendar_header_arrow_create(g_calendar);
 #endif
-
-    lv_calendar_set_showed_date(calendar, show_timeinfo.tm_year + 2024, show_timeinfo.tm_mon + 1);
 }
 
 lv_obj_t *dot = NULL;
@@ -461,11 +596,84 @@ lv_obj_t *setupGUI()
     // lv_style_set_text_font(&onestyle, &fn1_32);  //Due to upgrading the lvgl version, the font is invalid and replaced with ordinary fonts.
     lv_style_set_text_font(&onestyle, &lv_font_montserrat_24);
 
-    // Upper left corner logo
-    lv_obj_t *casio = lv_label_create(view);
-    lv_obj_add_style(casio, &onestyle, 0);
-    lv_label_set_text(casio, "LilyGo");
-    lv_obj_align(casio, LV_ALIGN_TOP_LEFT, 10, 10);
+    // Toggle buttons at top-left in sequential grid
+    int btn_size = 40;
+    int btn_spacing = 5;
+    int start_x = 10;
+    int start_y = 10;
+
+    // BLE Toggle Button (top-left, position 0)
+    ble_toggle_btn = lv_btn_create(view);
+    lv_obj_set_size(ble_toggle_btn, btn_size, btn_size);
+    lv_obj_set_pos(ble_toggle_btn, start_x, start_y);
+    lv_obj_set_style_radius(ble_toggle_btn, 5, 0);  // Square with slight rounding
+    lv_obj_add_event_cb(ble_toggle_btn, ble_toggle_event_cb, LV_EVENT_CLICKED, NULL);
+    
+    lv_obj_t *ble_btn_label = lv_label_create(ble_toggle_btn);
+    lv_label_set_recolor(ble_btn_label, true);
+    if (bleEnabled) {
+        lv_label_set_text(ble_btn_label, "#0000FF " LV_SYMBOL_BLUETOOTH "#");
+    } else {
+        lv_label_set_text(ble_btn_label, "#808080 " LV_SYMBOL_BLUETOOTH "#");
+    }
+    lv_obj_center(ble_btn_label);
+    lv_obj_set_style_text_font(ble_btn_label, &lv_font_montserrat_20, 0);
+
+    // WiFi Toggle Button (position 1)
+    lv_obj_t *wifi_toggle_btn = lv_btn_create(view);
+    lv_obj_set_size(wifi_toggle_btn, btn_size, btn_size);
+    lv_obj_set_pos(wifi_toggle_btn, start_x + (btn_size + btn_spacing), start_y);
+    lv_obj_set_style_radius(wifi_toggle_btn, 5, 0);
+    lv_obj_add_event_cb(wifi_toggle_btn, [](lv_event_t *e) {
+        wifiEnabled = !wifiEnabled;
+        lv_obj_t *label = lv_obj_get_child(lv_event_get_target(e), 0);
+        if (wifiEnabled) {
+            WiFi.mode(WIFI_MODE_STA);
+            lv_label_set_text(label, "#0000FF " LV_SYMBOL_WIFI "#");
+        } else {
+            WiFi.mode(WIFI_MODE_NULL);
+            lv_label_set_text(label, "#808080 " LV_SYMBOL_WIFI "#");
+        }
+    }, LV_EVENT_CLICKED, NULL);
+    
+    lv_obj_t *wifi_btn_label = lv_label_create(wifi_toggle_btn);
+    lv_label_set_recolor(wifi_btn_label, true);
+    if (wifiEnabled) {
+        lv_label_set_text(wifi_btn_label, "#0000FF " LV_SYMBOL_WIFI "#");
+    } else {
+        lv_label_set_text(wifi_btn_label, "#808080 " LV_SYMBOL_WIFI "#");
+    }
+    lv_obj_center(wifi_btn_label);
+    lv_obj_set_style_text_font(wifi_btn_label, &lv_font_montserrat_18, 0);
+
+    // LoRa Toggle Button (position 2)
+    lv_obj_t *lora_toggle_btn = lv_btn_create(view);
+    lv_obj_set_size(lora_toggle_btn, btn_size, btn_size);
+    lv_obj_set_pos(lora_toggle_btn, start_x + 2 * (btn_size + btn_spacing), start_y);
+    lv_obj_set_style_radius(lora_toggle_btn, 5, 0);
+    lv_obj_add_event_cb(lora_toggle_btn, [](lv_event_t *e) {
+        loraEnabled = !loraEnabled;
+        lv_obj_t *label = lv_obj_get_child(lv_event_get_target(e), 0);
+        if (loraEnabled) {
+            // Enable LoRa (implementation depends on your radio setup)
+            // watch.enableRadio(); // Uncomment if you have this method
+            lv_label_set_text(label, "#0000FF L#");
+        } else {
+            // Disable LoRa
+            // watch.disableRadio(); // Uncomment if you have this method
+            lv_label_set_text(label, "#808080 L#");
+        }
+    }, LV_EVENT_CLICKED, NULL);
+    
+    lv_obj_t *lora_btn_label = lv_label_create(lora_toggle_btn);
+    lv_label_set_recolor(lora_btn_label, true);
+    if (loraEnabled) {
+        lv_label_set_text(lora_btn_label, "#0000FF L#");
+    } else {
+        lv_label_set_text(lora_btn_label, "#808080 L#");
+    }
+    lv_obj_center(lora_btn_label);
+    lv_obj_set_style_text_font(lora_btn_label, &lv_font_montserrat_18, 0);
 
     // Upper right corner model
     static lv_style_t model_style;
@@ -674,23 +882,6 @@ lv_obj_t *setupGUI()
     sprintf(temp_text_value, "%d°C", (int)temp);
     lv_label_set_text(temp_text, temp_text_value);
     lv_obj_align_to(temp_text, bat_text, LV_ALIGN_OUT_BOTTOM_MID, 0, -5);
-
-    // BLE Toggle Button
-    ble_toggle_btn = lv_btn_create(view);
-    lv_obj_set_size(ble_toggle_btn, 50, 50);
-    lv_obj_align(ble_toggle_btn, LV_ALIGN_LEFT_MID, 15, 40);
-    lv_obj_set_style_radius(ble_toggle_btn, 25, 0);
-    lv_obj_add_event_cb(ble_toggle_btn, ble_toggle_event_cb, LV_EVENT_CLICKED, NULL);
-    
-    lv_obj_t *ble_btn_label = lv_label_create(ble_toggle_btn);
-    lv_label_set_recolor(ble_btn_label, true);
-    if (bleEnabled) {
-        lv_label_set_text(ble_btn_label, "#0000FF " LV_SYMBOL_BLUETOOTH "#");
-    } else {
-        lv_label_set_text(ble_btn_label, "#808080 " LV_SYMBOL_BLUETOOTH "#");
-    }
-    lv_obj_center(ble_btn_label);
-    lv_obj_set_style_text_font(ble_btn_label, &lv_font_montserrat_24, 0);
 
     // Power
     static lv_style_t bat_style;
@@ -1561,6 +1752,8 @@ void loop()
     lv_task_handler();
     SensorHandler();
     PMUHandler();
+    get_BattVoltage(); // Update battery info including discharge rate
+    app_batt_voltage_update(); // Update battery app table if active
     check_alarm(); // Check if alarm should trigger
     if (standby_en)
     {
@@ -1630,15 +1823,81 @@ void get_BattVoltage(void)
         if (lastMillis < millis())
         {
             uint8_t charge_status = watch.getChargerStatus();
-            lv_label_set_text_fmt(batt_voltage_label, "Charging:%s\nDischarge:%s\nUSB PlugIn:%s\nCHG state:%s\nBattery Voltage:%u mV\nUSB Voltage:%u mV\nSYS Voltage:%u mV\nBattery Percent:%d%%",
-                                  watch.isCharging() ? "#00ff00 YES" : "#ff0000 NO",
-                                  watch.isDischarge() ? "#00ff00 YES" : "#ff0000 NO",
-                                  watch.isVbusIn() ? "#00ff00 YES" : "#ff0000 NO",
-                                  chg_status[charge_status],
-                                  watch.getBattVoltage(),
-                                  watch.getVbusVoltage(),
-                                  watch.getSystemVoltage(),
-                                  watch.getBatteryPercent());
+            float current_percent = watch.getBatteryPercent();
+            unsigned long current_time = millis();
+            
+            // Calculate discharge rate (only when discharging)
+            extern float last_battery_percent;
+            extern unsigned long last_battery_time;
+            extern float discharge_rate_percent_per_hour;
+            
+            if (!watch.isCharging() && last_battery_percent >= 0 && last_battery_time > 0) {
+                unsigned long time_diff_ms = current_time - last_battery_time;
+                float time_diff_hours = time_diff_ms / 3600000.0f;
+                
+                if (time_diff_hours > 0.1f) { // Update every 6 minutes minimum
+                    float percent_diff = last_battery_percent - current_percent;
+                    if (percent_diff > 0) {
+                        discharge_rate_percent_per_hour = percent_diff / time_diff_hours;
+                    }
+                    last_battery_percent = current_percent;
+                    last_battery_time = current_time;
+                }
+            } else if (watch.isCharging()) {
+                // Reset tracking when charging
+                last_battery_percent = current_percent;
+                last_battery_time = current_time;
+                discharge_rate_percent_per_hour = 0.0f;
+            } else if (last_battery_percent < 0) {
+                // Initialize tracking
+                last_battery_percent = current_percent;
+                last_battery_time = current_time;
+            }
+            
+            // Calculate remaining time
+            float remaining_hours = 0.0f;
+            if (discharge_rate_percent_per_hour > 0.1f && !watch.isCharging()) {
+                remaining_hours = current_percent / discharge_rate_percent_per_hour;
+            }
+            
+            // Calculate discharge rate in mA
+            float discharge_rate_ma = (discharge_rate_percent_per_hour * 470.0f) / 100.0f;
+            
+            // Format output
+            char time_str[32] = "Calculating...";
+            if (watch.isCharging()) {
+                sprintf(time_str, "Charging");
+            } else if (remaining_hours > 0.1f) {
+                int hours = (int)remaining_hours;
+                int minutes = (int)((remaining_hours - hours) * 60);
+                sprintf(time_str, "%dh %dm", hours, minutes);
+            }
+            
+            char rate_str[32] = "Calculating...";
+            if (watch.isCharging()) {
+                sprintf(rate_str, "N/A (Charging)");
+            } else if (discharge_rate_ma > 0.1f) {
+                sprintf(rate_str, "%.1f mA (%.1f%%/h)", discharge_rate_ma, discharge_rate_percent_per_hour);
+            }
+            
+            lv_label_set_text_fmt(batt_voltage_label, 
+                "Charging:%s | Discharge:%s\n"
+                "USB PlugIn:%s | CHG:%s\n"
+                "Battery: %u mV | %d%%\n"
+                "USB: %u mV | SYS: %u mV\n"
+                "#FFFF00 Remaining: %s#\n"
+                "#FF8800 Rate: %s#",
+                watch.isCharging() ? "#00ff00 YES" : "#ff0000 NO",
+                watch.isDischarge() ? "#00ff00 YES" : "#ff0000 NO",
+                watch.isVbusIn() ? "#00ff00 YES" : "#ff0000 NO",
+                chg_status[charge_status],
+                watch.getBattVoltage(),
+                (int)current_percent,
+                watch.getVbusVoltage(),
+                watch.getSystemVoltage(),
+                time_str,
+                rate_str);
+            
             lastMillis = millis() + 1000;
         }
     }
