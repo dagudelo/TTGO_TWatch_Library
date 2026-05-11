@@ -129,8 +129,10 @@ static bool pmuIrq = false;
 static bool canScreenOff = true;
 // Flag used to detect USB insertion status
 static bool usbPlugIn = false;
+
 // Flag to indicate that a packet was sent or received
 static bool radioTransmitFlag = false;
+
 // Save transmission states between loops
 static int transmissionState = RADIOLIB_ERR_NONE;
 // Flag to indicate transmission or reception state
@@ -675,7 +677,7 @@ void factory_ui()
     irRemoteVeiw(t6);
     datetimeVeiw(t7);
 
-    transmitTask =  lv_timer_create(radioTask, 200, NULL);
+    transmitTask =  lv_timer_create(radioTask, 1000, NULL);
 
     lv_disp_trig_activity(NULL);
 
@@ -685,8 +687,11 @@ void factory_ui()
 void radioTask(lv_timer_t *parent)
 {
     char buf[256];
+    Serial.printf("radioTask running. radioTransmitFlag: %d, transmitFlag: %d\n", radioTransmitFlag, transmitFlag);
+
     // check if the previous operation finished
     if (radioTransmitFlag) {
+        Serial.println("radioTransmitFlag is true, processing...");
         // reset flag
         radioTransmitFlag = false;
 
@@ -694,6 +699,7 @@ void radioTask(lv_timer_t *parent)
             //TX
             // the previous operation was transmission, listen for response
             // print the result
+            Serial.println(F("[Radio] TX done."));
             if (transmissionState == RADIOLIB_ERR_NONE) {
                 // packet was successfully sent
                 Serial.println(F("transmission finished!"));
@@ -705,12 +711,15 @@ void radioTask(lv_timer_t *parent)
             lv_snprintf(buf, 256, "[%u]:Tx %s", lv_tick_get() / 1000, transmissionState == RADIOLIB_ERR_NONE ? "Successed" : "Failed");
             lv_textarea_set_text(radio_ta, buf);
 
-            transmissionState = watch.startTransmit("Hello World!");
+            // Here we re-transmit. This will cause a continuous transmission.
+            Serial.println(F("[Radio] Transmitting again: 'Hello World!'"));
+            transmissionState = watch.startTransmit("Hello World!\r\n");
 
         } else {
             // RX
             // the previous operation was reception
             // print data and send another packet
+            Serial.println(F("[Radio] RX done."));
             String str;
             int state = watch.readData(str);
 
@@ -735,8 +744,11 @@ void radioTask(lv_timer_t *parent)
 
                 lv_snprintf(buf, 256, "[%u]:Rx %s \nRSSI:%.2f", lv_tick_get() / 1000, str.c_str(), watch.getRSSI());
                 lv_textarea_set_text(radio_ta, buf);
+            } else {
+                Serial.printf("[SX1262] Receive failed, code: %d\n", state);
             }
 
+            Serial.println(F("[Radio] Starting to listen again..."));
             watch.startReceive();
         }
     }
@@ -1280,6 +1292,23 @@ void wifiscan(lv_obj_t *parent)
     lv_obj_align_to(wifi_table_list, label, LV_ALIGN_OUT_BOTTOM_MID, 0, 10);
 }
 
+void logRadioParameters() {
+#if defined(LILYGO_TWatch_HAS_RADIO)
+    Serial.println("--- LoRa Parameters ---");
+    Serial.printf("Frequency: %.2f MHz\n", watch.radio->getFrequency());
+    Serial.printf("Bandwidth: %.2f kHz\n", watch.radio->getBandwidth());
+    Serial.printf("Spreading Factor: %d\n", watch.radio->getSpreadingFactor());
+    uint8_t cr = watch.radio->getCodingRate();
+    Serial.printf("Coding Rate: 4/%d\n", cr);
+    Serial.printf("Sync Word: 0x%02X\n", watch.radio->getSyncWord());
+    Serial.printf("Preamble Length: %d\n", watch.radio->getPreambleLength());
+    // These are not gettable, but we know what we set them to.
+    Serial.println("CRC: Disabled");
+    Serial.println("IQ Inversion: Standard (False)");
+    Serial.println("-----------------------");
+#endif
+}
+
 static void radio_rxtx_cb(lv_event_t *e)
 {
     lv_obj_t *obj = lv_event_get_target(e);
@@ -1287,13 +1316,14 @@ static void radio_rxtx_cb(lv_event_t *e)
     lv_dropdown_get_selected_str(obj, buf, sizeof(buf));
     uint32_t id = lv_dropdown_get_selected(obj);
     Serial.printf("Option: %s id:%u\n", buf, id);
+    logRadioParameters(); 
     switch (id) {
     case 0:
         lv_timer_resume(transmitTask);
         // TX
         // send the first packet on this node
         Serial.print(F("[Radio] Sending first packet ... "));
-        transmissionState = watch.startTransmit("Hello World!");
+        transmissionState = watch.startTransmit("Hello World!\r\n");
         transmitFlag = true;
 
         break;
@@ -1558,7 +1588,7 @@ void radioPingPong(lv_obj_t *parent)
                            );
     lv_obj_add_flag(dd, LV_OBJ_FLAG_EVENT_BUBBLE);
     lv_obj_set_size(dd, 170, 50);
-    lv_dropdown_set_selected(dd, 1);
+    lv_dropdown_set_selected(dd, 0);
     lv_obj_add_event_cb(dd, radio_bandwidth_cb,
                         LV_EVENT_VALUE_CHANGED
                         , NULL);
@@ -2189,58 +2219,59 @@ void setRadioFlag(void)
 
 void settingRadio()
 {
-#ifdef USING_TWATCH_S3
-    // set carrier frequency to 868.0 MHz
-    if (watch.setFrequency(868.0) == RADIOLIB_ERR_INVALID_FREQUENCY) {
+#if defined(LILYGO_TWatch_HAS_RADIO)
+    if (!watch.radio->begin()) {
+        Serial.println("Starting LoRa failed!");
+        while (1);
+    }
+    watch.radio->setDio1Action(setRadioFlag);
+
+    // Set the frequency to 868 MHz
+    if (watch.radio->setFrequency(868.0) == RADIOLIB_ERR_INVALID_FREQUENCY) {
         Serial.println(F("Selected frequency is invalid for this module!"));
+        while (1);
     }
 
-    // set bandwidth to 250 kHz
-    if (watch.setBandwidth(250.0) == RADIOLIB_ERR_INVALID_BANDWIDTH) {
+    // Set the bandwidth to 125.0 kHz
+    if (watch.radio->setBandwidth(125.0) == RADIOLIB_ERR_INVALID_BANDWIDTH) {
         Serial.println(F("Selected bandwidth is invalid for this module!"));
+        while (1);
     }
 
-    // set spreading factor to 10
-    if (watch.setSpreadingFactor(10) == RADIOLIB_ERR_INVALID_SPREADING_FACTOR) {
+    // Set the spreading factor to 12
+    if (watch.radio->setSpreadingFactor(12) == RADIOLIB_ERR_INVALID_SPREADING_FACTOR) {
         Serial.println(F("Selected spreading factor is invalid for this module!"));
+        while (1);
     }
 
-    // set coding rate to 6
-    if (watch.setCodingRate(6) == RADIOLIB_ERR_INVALID_CODING_RATE) {
+    // Set the coding rate to 6 (4/6)
+    if (watch.radio->setCodingRate(6) == RADIOLIB_ERR_INVALID_CODING_RATE) {
         Serial.println(F("Selected coding rate is invalid for this module!"));
+        while (1);
     }
-
-    // set LoRa sync word to 0xAB
-    if (watch.setSyncWord(0xAB) != RADIOLIB_ERR_NONE) {
-        Serial.println(F("Unable to set sync word!"));
+    // Set the sync word to 0x12
+    if (watch.radio->setSyncWord(0x12) == RADIOLIB_ERR_INVALID_SYNC_WORD) {
+        Serial.println(F("Selected sync word is invalid for this module!"));
+        while (1);
     }
+    // Set standard IQ
+    watch.radio->invertIQ(false);
+    
+    // Disable CRC
+    watch.radio->setCRC(false);
 
-    // set output power to 10 dBm (accepted range is -17 - 22 dBm)
-    if (watch.setOutputPower(22) == RADIOLIB_ERR_INVALID_OUTPUT_POWER) {
-        Serial.println(F("Selected output power is invalid for this module!"));
-    }
-
-    // set over current protection limit to 140 mA (accepted range is 45 - 140 mA)
-    // NOTE: set value to 0 to disable overcurrent protection
-    if (watch.setCurrentLimit(140) == RADIOLIB_ERR_INVALID_CURRENT_LIMIT) {
-        Serial.println(F("Selected current limit is invalid for this module!"));
-    }
-
-    // set LoRa preamble length to 15 symbols (accepted range is 0 - 65535)
-    if (watch.setPreambleLength(15) == RADIOLIB_ERR_INVALID_PREAMBLE_LENGTH) {
+    // set LoRa preamble length to 8 symbols (accepted range is 0 - 65535)
+    if (watch.radio->setPreambleLength(8) == RADIOLIB_ERR_INVALID_PREAMBLE_LENGTH) {
         Serial.println(F("Selected preamble length is invalid for this module!"));
     }
 
-    // disable CRC
-    if (watch.setCRC(false) == RADIOLIB_ERR_INVALID_CRC_CONFIGURATION) {
-        Serial.println(F("Selected CRC is invalid for this module!"));
+    // Set the output power to 22 dBm
+    if (watch.radio->setOutputPower(22) == RADIOLIB_ERR_INVALID_OUTPUT_POWER) {
+        Serial.println(F("Selected output power is invalid for this module!"));
+        while (1);
     }
-
-    // set the function that will be called
-    // when new packet is received
-    watch.setDio1Action(setRadioFlag);
+    Serial.println("LoRa init succeeded.");
 #endif
-
 }
 
 void playerTask(void *params)

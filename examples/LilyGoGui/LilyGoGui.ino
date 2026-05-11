@@ -17,10 +17,6 @@
  */
 #define ENABLE_PLAYER
 #define ENABLE_IR_SENDER
-
-// Include composite HID implementation
-#include "BleCompositeHID.h"
-
 #include <LilyGoLib.h>
 #include <LV_Helper.h>
 #include <WiFi.h>
@@ -72,20 +68,8 @@ TaskHandle_t playACCHandler;
 #include "global_flags.h"
 #include "ui.h"
 #include "app_alarm.h"
-#include "app_batt_voltage.h"
 #include <driver/gpio.h>
-
-// Single composite HID device with keyboard and mouse capabilities
-BleCompositeHID bleHID("T-Watch HID", "LilyGo", 100);
-bool bleEnabled = true; // BLE is enabled by default
-bool wifiEnabled = true; // WiFi is enabled by default
-bool loraEnabled = false; // LoRa is disabled by default
-
-// Battery discharge tracking
-float last_battery_percent = -1.0f;
-unsigned long last_battery_time = 0;
-float discharge_rate_percent_per_hour = 0.0f;
-
+#include "NimBLEDevice.h"
 extern lv_obj_t *step_counter_label;
 extern lv_obj_t *batt_voltage_label;
 extern lv_obj_t *chart;
@@ -93,7 +77,7 @@ extern void set_text_radio_ta(const char *txt);
 void suspend_playMP3Handler(void);
 void resume_playMP3Handler(void);
 
-#define BG_COLOR 0xffffff
+#define BG_COLOR 0xfffff0
 
 #define LVGL_MESSAGE_PROGRESS_CHANGED_ID (88)
 #define DEFAULT_RECORD_FILENAME "/rec.wav"
@@ -149,9 +133,6 @@ LV_FONT_DECLARE(exninja_22);
 LV_FONT_DECLARE(font_siegra);
 char standby_en = 1;
 
-// Dark mode flag for battery saving
-bool dark_mode_enabled = false;
-
 void radioTask(lv_timer_t *parent);
 
 void my_print(const char *buf)
@@ -161,7 +142,8 @@ void my_print(const char *buf)
 }
 
 lv_obj_t *wifi_test_obj = NULL;
-// NTP servers are defined as macros above, using those instead
+const char *ntpServer1 = "pool.ntp.org";
+const char *ntpServer2 = "time.nist.gov";
 const long gmtOffset_sec = -5 * 60 * 60;
 const int daylightOffset_sec = 0;
 struct tm timeinfo;
@@ -212,7 +194,6 @@ static RTC_DATA_ATTR int brightnessLevel = 0;
 // Vad detecte values
 static int16_t *vad_buff = NULL;
 static vad_handle_t vad_inst = NULL;
-
 const size_t vad_buffer_size = VAD_BUFFER_LENGTH * sizeof(short);
 typedef struct _lv_datetime
 {
@@ -282,43 +263,26 @@ void setup()
     settingSensor();
     settingRadio();
     settingPlayer();
-    settingIRRemote();
-    beginLvglHelper(false);
-    
-    // Initialize single composite BLE HID device (keyboard + mouse + media keys)
-    bleHID.begin();
-       
-    transmitTask = lv_timer_create(radioTask, 1000, NULL);
+    settingIRRemote();  
+    transmitTask = lv_timer_create(radioTask, 200, NULL);
     lv_timer_pause(transmitTask);
     global_event_group = xEventGroupCreate();
     led_setting_queue = xQueueCreate(5, sizeof(uint16_t));
     led_flicker_queue = xQueueCreate(5, sizeof(uint16_t));
-    play_music_queue = xQueueCreate(10, sizeof(std::string*));  // Queue holds std::string* pointers
+    play_music_queue = xQueueCreate(5, sizeof(String));
     play_time_queue = xQueueCreate(5, sizeof(uint32_t));
     lv_input_event = xEventGroupCreate();
     usbPlugIn = watch.isVbusIn();
-    
-    // Initialize RTC time first - read from hardware RTC if available
-    struct tm rtc_timeinfo;
-    watch.getDateTime(&rtc_timeinfo);  // getDateTime() returns void, fills the struct
-    // Check if RTC time is valid (year should be reasonable, e.g., >= 2020)
-    if (rtc_timeinfo.tm_year >= 120) {  // tm_year is years since 1900, so 120 = 2020
-        // RTC has valid time, use it to set system time
-        time_t rtc_time = mktime(&rtc_timeinfo);
-        struct timeval tv = { .tv_sec = rtc_time };
-        settimeofday(&tv, NULL);
-        Serial.println("Initialized system time from RTC");
-    } else {
-        Serial.println("RTC time not available, will sync from NTP");
-    }
-    
     sntp_servermode_dhcp(1); // (optional)
-    configTime(gmtOffset_sec, daylightOffset_sec, NTP_SERVER1, NTP_SERVER2);
+    configTime(gmtOffset_sec, daylightOffset_sec, ntpServer1, ntpServer2);
     wifi_test();
+    beginLvglHelper(false);
+
     sntp_set_time_sync_notification_cb( timeavailable );
        
 
     setupGUI();
+    play_music_queue = xQueueCreate(10, sizeof(char *));
     xTaskCreatePinnedToCore(playMP3Task, "playMP3Task", 8192, NULL, 10, &playerTaskHandler, 0);
 }
 
@@ -332,34 +296,13 @@ void resume_playMP3Handler(void)
     vTaskResume(playMP3Handler);
 }
 
+#define CASE_MAIN_GUI 1
+#define CASE_SETUP_GUI 6
+#define CASE_CALENDAR 5
+
 
 
 lv_obj_t *dot = NULL;
-lv_obj_t *ble_toggle_btn = NULL;
-
-static void ble_toggle_event_cb(lv_event_t *e)
-{
-    lv_event_code_t code = lv_event_get_code(e);
-    if (code == LV_EVENT_CLICKED)
-    {
-        bleEnabled = !bleEnabled;
-        lv_obj_t *label = lv_obj_get_child(ble_toggle_btn, 0);
-        
-        if (bleEnabled)
-        {
-            bleHID.begin();
-            lv_label_set_text(label, "#0000FF " LV_SYMBOL_BLUETOOTH "#");
-            Serial.println("BLE Enabled");
-        }
-        else
-        {
-            bleHID.end();
-            lv_label_set_text(label, "#808080 " LV_SYMBOL_BLUETOOTH "#");
-            Serial.println("BLE Disabled");
-        }
-    }
-}
-
 lv_obj_t *setupGUI()
 {
     static lv_style_t cont_style;
@@ -373,103 +316,25 @@ lv_obj_t *setupGUI()
     lv_obj_t *view = lv_obj_create(lv_scr_act());
     lv_obj_set_style_pad_all(view, 0, 0);
     lv_obj_set_size(view, 240, 240);
-    lv_obj_set_style_bg_color(view, lv_color_hex(0x000000), 0); // Black background for battery saving
+    lv_obj_set_style_bg_color(view, lv_color_hex(0xffffff), 0);
     // lv_obj_add_style(view, &cont_style, 0);
 
     static lv_style_t onestyle;
     lv_style_init(&onestyle);
-    lv_style_set_text_color(&onestyle, LV_COLOR_WHITE);
+    lv_style_set_text_color(&onestyle, LV_COLOR_BLACK);
     // lv_style_set_text_font(&onestyle, &fn1_32);  //Due to upgrading the lvgl version, the font is invalid and replaced with ordinary fonts.
     lv_style_set_text_font(&onestyle, &lv_font_montserrat_24);
 
-    // Toggle buttons at top-left in sequential grid
-    int btn_size = 40;
-    int btn_spacing = 5;
-    int start_x = 10;
-    int start_y = 10;
-
-    // BLE Toggle Button (top-left, position 0)
-    ble_toggle_btn = lv_btn_create(view);
-    lv_obj_set_size(ble_toggle_btn, btn_size, btn_size);
-    lv_obj_set_pos(ble_toggle_btn, start_x, start_y);
-    lv_obj_set_style_radius(ble_toggle_btn, 5, 0);  // Square with slight rounding
-    lv_obj_add_event_cb(ble_toggle_btn, ble_toggle_event_cb, LV_EVENT_CLICKED, NULL);
-    
-    lv_obj_t *ble_btn_label = lv_label_create(ble_toggle_btn);
-    lv_label_set_recolor(ble_btn_label, true);
-    if (bleEnabled) {
-        lv_label_set_text(ble_btn_label, "#0000FF " LV_SYMBOL_BLUETOOTH "#");
-    } else {
-        lv_label_set_text(ble_btn_label, "#808080 " LV_SYMBOL_BLUETOOTH "#");
-    }
-    lv_obj_center(ble_btn_label);
-    lv_obj_set_style_text_font(ble_btn_label, &lv_font_montserrat_20, 0);
-
-    // WiFi Toggle Button (position 1)
-    lv_obj_t *wifi_toggle_btn = lv_btn_create(view);
-    lv_obj_set_size(wifi_toggle_btn, btn_size, btn_size);
-    lv_obj_set_pos(wifi_toggle_btn, start_x + (btn_size + btn_spacing), start_y);
-    lv_obj_set_style_radius(wifi_toggle_btn, 5, 0);
-    lv_obj_add_event_cb(wifi_toggle_btn, [](lv_event_t *e) {
-        wifiEnabled = !wifiEnabled;
-        lv_obj_t *label = lv_obj_get_child(lv_event_get_target(e), 0);
-        if (wifiEnabled) {
-            WiFi.mode(WIFI_MODE_STA);
-            lv_label_set_text(label, "#0000FF " LV_SYMBOL_WIFI "#");
-        } else {
-            WiFi.mode(WIFI_MODE_NULL);
-            lv_label_set_text(label, "#808080 " LV_SYMBOL_WIFI "#");
-        }
-    }, LV_EVENT_CLICKED, NULL);
-    
-    lv_obj_t *wifi_btn_label = lv_label_create(wifi_toggle_btn);
-    lv_label_set_recolor(wifi_btn_label, true);
-    if (wifiEnabled) {
-        lv_label_set_text(wifi_btn_label, "#0000FF " LV_SYMBOL_WIFI "#");
-    } else {
-        lv_label_set_text(wifi_btn_label, "#808080 " LV_SYMBOL_WIFI "#");
-    }
-    lv_obj_center(wifi_btn_label);
-    lv_obj_set_style_text_font(wifi_btn_label, &lv_font_montserrat_18, 0);
-
-    // LoRa Toggle Button (position 2)
-    lv_obj_t *lora_toggle_btn = lv_btn_create(view);
-    lv_obj_set_size(lora_toggle_btn, btn_size, btn_size);
-    lv_obj_set_pos(lora_toggle_btn, start_x + 2 * (btn_size + btn_spacing), start_y);
-    lv_obj_set_style_radius(lora_toggle_btn, 5, 0);
-    lv_obj_add_event_cb(lora_toggle_btn, [](lv_event_t *e) {
-        loraEnabled = !loraEnabled;
-        lv_obj_t *label = lv_obj_get_child(lv_event_get_target(e), 0);
-        if (loraEnabled) {
-            lv_label_set_text(label, "#0000FF L#");
-            Serial.println("LoRa Enabled. Starting TX.");
-            logRadioParameters(); // Log parameters on enable
-            transmitFlag = true; // Set to transmitter mode
-            // Start the first transmission
-            transmissionState = watch.startTransmit("Hello World!\r\n");
-            lv_timer_resume(transmitTask);
-        } else {
-            lv_label_set_text(label, "#808080 L#");
-            Serial.println("LoRa Disabled.");
-            lv_timer_pause(transmitTask);
-            watch.standby();
-        }
-    }, LV_EVENT_CLICKED, NULL);
-    
-    lv_obj_t *lora_btn_label = lv_label_create(lora_toggle_btn);
-    lv_label_set_recolor(lora_btn_label, true);
-    if (loraEnabled) {
-        lv_label_set_text(lora_btn_label, "#0000FF L#");
-    } else {
-        lv_label_set_text(lora_btn_label, "#808080 L#");
-    }
-    lv_obj_center(lora_btn_label);
-    lv_obj_set_style_text_font(lora_btn_label, &lv_font_montserrat_18, 0);
+    // Upper left corner logo
+    lv_obj_t *casio = lv_label_create(view);
+    lv_obj_add_style(casio, &onestyle, 0);
+    lv_label_set_text(casio, "LilyGo");
+    lv_obj_align(casio, LV_ALIGN_TOP_LEFT, 10, 10);
 
     // Upper right corner model
     static lv_style_t model_style;
     lv_style_init(&model_style);
-    lv_style_set_text_color(&model_style, LV_COLOR_WHITE);
+    lv_style_set_text_color(&model_style, LV_COLOR_BLACK);
     // lv_style_set_text_font(&model_style, &robot_ightItalic_16); //Due to upgrading the lvgl version, the font is invalid and replaced with ordinary fonts.
     lv_style_set_text_font(&onestyle, &lv_font_montserrat_28);
 
@@ -481,7 +346,7 @@ lv_obj_t *setupGUI()
     // Line style
     static lv_style_t line_style;
     lv_style_init(&line_style);
-    lv_style_set_line_color(&line_style, LV_COLOR_WHITE);
+    lv_style_set_line_color(&line_style, LV_COLOR_BLACK);
     lv_style_set_line_width(&line_style, 2);
     lv_style_set_line_rounded(&line_style, 1);
 
@@ -512,7 +377,7 @@ lv_obj_t *setupGUI()
     // Below the horizontal line in the upper left corner
     static lv_style_t text_style;
     lv_style_init(&text_style);
-    lv_style_set_text_color(&text_style, LV_COLOR_WHITE);
+    lv_style_set_text_color(&text_style, LV_COLOR_BLACK);
     // lv_style_set_text_font(&text_style, &robot_ightItalic_16);//Due to upgrading the lvgl version, the font is invalid and replaced with ordinary fonts.
     lv_style_set_text_font(&text_style, &lv_font_montserrat_16);
 
@@ -525,28 +390,22 @@ lv_obj_t *setupGUI()
     //! arrow -> right
     lv_obj_t *img1 = lv_img_create(view);
     lv_img_set_src(img1, &arrow_right_png);
-    lv_obj_set_style_img_recolor(img1, lv_color_white(), 0);
-    lv_obj_set_style_img_recolor_opa(img1, LV_OPA_100, 0);
     lv_obj_align_to(img1, line1, LV_ALIGN_OUT_BOTTOM_RIGHT, -10, 5);
 
     //! arrow down -> left
     lv_obj_t *img2 = lv_img_create(view);
     lv_img_set_src(img2, &arrow_left_png);
-    lv_obj_set_style_img_recolor(img2, lv_color_white(), 0);
-    lv_obj_set_style_img_recolor_opa(img2, LV_OPA_100, 0);
     lv_obj_align_to(img2, line2, LV_ALIGN_OUT_TOP_LEFT, 0, -5);
 
     //! arrow down -> right
     lv_obj_t *img3 = lv_img_create(view);
     lv_img_set_src(img3, &arrow_right_png);
-    lv_obj_set_style_img_recolor(img3, lv_color_white(), 0);
-    lv_obj_set_style_img_recolor_opa(img3, LV_OPA_100, 0);
     lv_obj_align_to(img3, line3, LV_ALIGN_OUT_TOP_RIGHT, 0, -5);
 
     // Intermediate clock time division font
     static lv_style_t time_style;
     lv_style_init(&time_style);
-    lv_style_set_text_color(&time_style, LV_COLOR_WHITE);
+    lv_style_set_text_color(&time_style, LV_COLOR_BLACK);
     // lv_style_set_text_font(&time_style,  &digital_play_st_48);//Due to upgrading the lvgl version, the font is invalid and replaced with ordinary fonts.
     lv_style_set_text_font(&time_style, &lv_font_montserrat_48);
     // lv_style_set_text_align(&time_style, LV_ALIGN_RIGHT_MID);
@@ -564,7 +423,7 @@ lv_obj_t *setupGUI()
     // semicolon
     static lv_style_t dot_style;
     lv_style_init(&dot_style);
-    lv_style_set_text_color(&dot_style, LV_COLOR_WHITE);
+    lv_style_set_text_color(&dot_style, LV_COLOR_BLACK);
     // lv_style_set_text_font(&dot_style, &liquidCrystal_nor_64);//Due to upgrading the lvgl version, the font is invalid and replaced with ordinary fonts.
     lv_style_set_text_font(&dot_style, &lv_font_montserrat_48);
 
@@ -586,7 +445,7 @@ lv_obj_t *setupGUI()
     // Intermediate clock second digit
     static lv_style_t second_style;
     lv_style_init(&second_style);
-    lv_style_set_text_color(&second_style, LV_COLOR_WHITE);
+    lv_style_set_text_color(&second_style, LV_COLOR_BLACK);
     // lv_style_set_text_font(&second_style, &liquidCrystal_nor_32);//Due to upgrading the lvgl version, the font is invalid and replaced with ordinary fonts.
     lv_style_set_text_font(&dot_style, &lv_font_montserrat_32);
 
@@ -601,7 +460,7 @@ lv_obj_t *setupGUI()
     // date
     static lv_style_t year_style;
     lv_style_init(&year_style);
-    lv_style_set_text_color(&year_style, LV_COLOR_WHITE);
+    lv_style_set_text_color(&year_style, LV_COLOR_BLACK);
     // lv_style_set_text_font(&year_style, &liquidCrystal_nor_24);//Due to upgrading the lvgl version, the font is invalid and replaced with ordinary fonts.
     lv_style_set_text_font(&year_style, &lv_font_montserrat_24);
 
@@ -615,7 +474,7 @@ lv_obj_t *setupGUI()
     // Chinese font
     static lv_style_t chinese_style;
     lv_style_init(&chinese_style);
-    lv_style_set_text_color(&chinese_style, LV_COLOR_WHITE);
+    lv_style_set_text_color(&chinese_style, LV_COLOR_BLACK);
     // lv_style_set_text_font(&chinese_style, &hansans_cn_24);//Due to upgrading the lvgl version, the font is invalid and replaced with ordinary fonts.
     lv_style_set_text_font(&year_style, &lv_font_montserrat_24);
 
@@ -669,7 +528,7 @@ lv_obj_t *setupGUI()
     // temperature
     static lv_style_t temp_style;
     lv_style_init(&temp_style);
-    lv_style_set_text_color(&temp_style, LV_COLOR_WHITE);
+    lv_style_set_text_color(&temp_style, LV_COLOR_BLACK);
     // lv_style_set_text_font(&temp_style, &quostige_16);//Due to upgrading the lvgl version, the font is invalid and replaced with ordinary fonts.
     lv_style_set_text_font(&temp_style, &lv_font_montserrat_16);
     float temp = watch.readCoreTemp();
@@ -683,7 +542,7 @@ lv_obj_t *setupGUI()
     // Power
     static lv_style_t bat_style;
     lv_style_init(&bat_style);
-    lv_style_set_text_color(&bat_style, LV_COLOR_WHITE);
+    lv_style_set_text_color(&bat_style, LV_COLOR_BLACK);
     // lv_style_set_text_font(&bat_style, &digital_play_st_24);//Due to upgrading the lvgl version, the font is invalid and replaced with ordinary fonts.
     lv_style_set_text_font(&bat_style, &lv_font_montserrat_16);
 
@@ -719,26 +578,20 @@ lv_obj_t *setupGUI()
     // Bottom Go
     static lv_style_t key_style;
     lv_style_init(&key_style);
-    lv_style_set_text_color(&key_style, LV_COLOR_WHITE);
+    lv_style_set_text_color(&key_style, LV_COLOR_BLACK);
     // lv_style_set_text_font(&key_style, &gracetians_32);
     lv_style_set_text_font(&key_style, &lv_font_montserrat_32);
     lv_obj_t *key = lv_label_create(view);
     lv_obj_add_style(key, &key_style, 0);
     lv_label_set_text(key, "Go");
     lv_obj_add_flag(key, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(key, [](lv_event_t *e) {
-        mainGUI();
-        lv_obj_t * btn = lv_event_get_target(e);
-        lv_obj_t * view = lv_obj_get_parent(btn);
-        lv_obj_del_delayed(view, 1);
-        second = NULL;
-    }, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(key, but_implement, LV_EVENT_CLICKED, (void *)1);
 
     lv_obj_align(key, LV_ALIGN_BOTTOM_MID, 0, -10);
 
     static lv_style_t bot_style;
     lv_style_init(&bot_style);
-    lv_style_set_text_color(&bot_style, LV_COLOR_WHITE);
+    lv_style_set_text_color(&bot_style, LV_COLOR_BLACK);
     // lv_style_set_text_font(&bot_style, &exninja_22);
     lv_style_set_text_font(&bot_style, &lv_font_montserrat_22);
 
@@ -755,7 +608,83 @@ lv_obj_t *setupGUI()
     return view;
 }
 
-// Removed unused wav_task function - queue handling is done in loop() function
+void wav_task(void *param)
+{
+    String music_path;
+
+    uint32_t time_pos;
+
+    while (1)
+    {
+        EventBits_t bit = xEventGroupGetBits(global_event_group);
+        if (bit)
+        {
+            if (bit & RING_PAUSE)
+            {
+                xEventGroupClearBits(global_event_group, RING_PAUSE);
+                is_pause = !is_pause;
+            }
+            if (bit & RING_STOP)
+            {
+                xEventGroupClearBits(global_event_group, RING_STOP);
+                mp3->stop();
+                suspend_playMP3Handler();
+                is_pause = false;
+            }
+            if (bit & WAV_RING_1)
+            {
+                xEventGroupClearBits(global_event_group, WAV_RING_1);
+                // if (!audio->isRunning()) {
+                mp3->stop();
+                suspend_playMP3Handler();
+                // mp3->connecttoFS(SPIFFS, "/ring_1.mp3");
+                //  Serial.println("play \"/ring_1.mp3\"");
+                is_pause = false;
+                // }
+            }
+        }
+        if (xQueueReceive(play_music_queue, &music_path, 0))
+        {
+            Serial.println(music_path.c_str());
+            mp3->stop();
+            if (!strcmp("ring_1.mp3", music_path.c_str()))
+            {
+                resume_playMP3Handler();
+                // my_print("xQueueReceive if\n");
+                // vTaskSuspend(playWAVHandler);
+                vTaskSuspend(playMP3Handler);
+                // vTaskSuspend(playFLACHandler);
+                // vTaskSuspend(playACCHandler);
+                // file->open(mp3_ring_1, mp3_ring_1_len);
+                file->open(mp3_array, sizeof(mp3_array) / sizeof(mp3_array[0]));
+                // file->open(AUDIO_DATA, sizeof(AUDIO_DATA));
+                mp3->begin(id3, out);
+                vTaskResume(playMP3Handler);
+            }
+            else
+            {
+                resume_playMP3Handler();
+                // my_print("xQueueReceive else\n");
+                // vTaskSuspend(playWAVHandler);
+                vTaskSuspend(playMP3Handler);
+                // vTaskSuspend(playFLACHandler);
+                // vTaskSuspend(playACCHandler);
+                file->open(mp3_ring_setup, sizeof(mp3_ring_setup) / sizeof(mp3_ring_setup[0]));
+                mp3->begin(id3, out);
+                vTaskResume(playMP3Handler);
+            }
+
+            // audio->connecttoFS(SD_MMC, music_path.c_str());
+            is_pause = false;
+        }
+        if (xQueueReceive(play_time_queue, &time_pos, 0))
+        {
+            // audio->setAudioPlayPosition(time_pos);
+        }
+  
+        delay(1);
+    }
+}
 
 lv_obj_t *mainGUI(void)
 {
@@ -895,55 +824,65 @@ void setRadioFlag(void)
 
 void settingRadio()
 {
-#if defined(LILYGO_TWatch_HAS_RADIO)
-    if (!watch.begin()) {
-        Serial.println("Starting LoRa failed!");
-        while (1);
-    }
-    watch.setDio1Action(setRadioFlag);
-
-    // Set the frequency to 868 MHz
-    if (watch.setFrequency(868.0) == RADIOLIB_ERR_INVALID_FREQUENCY) {
+#ifdef USING_TWATCH_S3
+    // set carrier frequency to 868.0 MHz
+    if (watch.setFrequency(868.0) == RADIOLIB_ERR_INVALID_FREQUENCY)
+    {
         Serial.println(F("Selected frequency is invalid for this module!"));
-        while (1);
     }
-    // Set the bandwidth to 125.0 kHz
-    if (watch.setBandwidth(125.0) == RADIOLIB_ERR_INVALID_BANDWIDTH) {
-        Serial.println(F("Selected bandwidth is invalid for this module!"));
-        while (1);
-    }
-    // Set the spreading factor to 12
-    if (watch.setSpreadingFactor(12) == RADIOLIB_ERR_INVALID_SPREADING_FACTOR) {
-        Serial.println(F("Selected spreading factor is invalid for this module!"));
-        while (1);
-    }
-    // Set the coding rate to 6 (4/6)
-    if (watch.setCodingRate(6) == RADIOLIB_ERR_INVALID_CODING_RATE) {
-        Serial.println(F("Selected coding rate is invalid for this module!"));
-        while (1);
-    }
-    // Set the sync word to 0x12
-    if (watch.setSyncWord(0x12) == RADIOLIB_ERR_INVALID_SYNC_WORD) {
-        Serial.println(F("Selected sync word is invalid for this module!"));
-        while (1);
-    }
-    // Set standard IQ
-    watch.invertIQ(false);
-    
-    // Disable CRC
-    watch.setCRC(false);
 
-    // set LoRa preamble length to 8 symbols (accepted range is 0 - 65535)
-    if (watch.setPreambleLength(8) == RADIOLIB_ERR_INVALID_PREAMBLE_LENGTH) {
+    // set bandwidth to 250 kHz
+    if (watch.setBandwidth(250.0) == RADIOLIB_ERR_INVALID_BANDWIDTH)
+    {
+        Serial.println(F("Selected bandwidth is invalid for this module!"));
+    }
+
+    // set spreading factor to 10
+    if (watch.setSpreadingFactor(10) == RADIOLIB_ERR_INVALID_SPREADING_FACTOR)
+    {
+        Serial.println(F("Selected spreading factor is invalid for this module!"));
+    }
+
+    // set coding rate to 6
+    if (watch.setCodingRate(6) == RADIOLIB_ERR_INVALID_CODING_RATE)
+    {
+        Serial.println(F("Selected coding rate is invalid for this module!"));
+    }
+
+    // set LoRa sync word to 0xAB
+    if (watch.setSyncWord(0xAB) != RADIOLIB_ERR_NONE)
+    {
+        Serial.println(F("Unable to set sync word!"));
+    }
+
+    // set output power to 10 dBm (accepted range is -17 - 22 dBm)
+    if (watch.setOutputPower(22) == RADIOLIB_ERR_INVALID_OUTPUT_POWER)
+    {
+        Serial.println(F("Selected output power is invalid for this module!"));
+    }
+
+    // set over current protection limit to 140 mA (accepted range is 45 - 140 mA)
+    // NOTE: set value to 0 to disable overcurrent protection
+    if (watch.setCurrentLimit(140) == RADIOLIB_ERR_INVALID_CURRENT_LIMIT)
+    {
+        Serial.println(F("Selected current limit is invalid for this module!"));
+    }
+
+    // set LoRa preamble length to 15 symbols (accepted range is 0 - 65535)
+    if (watch.setPreambleLength(15) == RADIOLIB_ERR_INVALID_PREAMBLE_LENGTH)
+    {
         Serial.println(F("Selected preamble length is invalid for this module!"));
     }
 
-    // Set the output power to 22 dBm
-    if (watch.setOutputPower(22) == RADIOLIB_ERR_INVALID_OUTPUT_POWER) {
-        Serial.println(F("Selected output power is invalid for this module!"));
-        while (1);
+    // disable CRC
+    if (watch.setCRC(false) == RADIOLIB_ERR_INVALID_CRC_CONFIGURATION)
+    {
+        Serial.println(F("Selected CRC is invalid for this module!"));
     }
-    Serial.println("LoRa init succeeded.");
+
+    // set the function that will be called
+    // when new packet is received
+    watch.setDio1Action(setRadioFlag);
 #endif
 }
 
@@ -1171,17 +1110,19 @@ static bool CreateWAV(const char *song_name, uint32_t duration, uint16_t num_cha
 
 void printLocalTime()
 {
-    // Always use RTC time for display (more accurate and persists across reboots)
-    struct tm rtc_timeinfo;
-    watch.getDateTime(&rtc_timeinfo);  // getDateTime() returns void, fills the struct
-    // Use RTC time directly
-    show_timeinfo.tm_year = rtc_timeinfo.tm_year;
-    show_timeinfo.tm_hour = rtc_timeinfo.tm_hour;
-    show_timeinfo.tm_mon = rtc_timeinfo.tm_mon;
-    show_timeinfo.tm_min = rtc_timeinfo.tm_min;
-    show_timeinfo.tm_wday = rtc_timeinfo.tm_wday;
-    show_timeinfo.tm_mday = rtc_timeinfo.tm_mday;
-    show_timeinfo.tm_sec = rtc_timeinfo.tm_sec;
+    if (!getLocalTime(&timeinfo))
+    {
+        Serial.println("No time available (yet)");
+        return;
+    }
+    show_timeinfo.tm_year = timeinfo.tm_year;
+    show_timeinfo.tm_hour = timeinfo.tm_hour;
+    show_timeinfo.tm_mon = timeinfo.tm_mon;
+    show_timeinfo.tm_min = timeinfo.tm_min;
+    show_timeinfo.tm_wday = timeinfo.tm_wday;
+    show_timeinfo.tm_mday = timeinfo.tm_mday;
+    show_timeinfo.tm_sec = timeinfo.tm_sec;
+   //Serial.println(&timeinfo, "%A, %B %d %Y %H:%M:%S");
 }
 
 // Callback function (get's called when time adjusts via NTP)
@@ -1189,10 +1130,8 @@ void timeavailable(struct timeval *t)
 {
     Serial.println("Got time adjustment from NTP!");
     printLocalTime();
-    // Write synchronized time to hardware RTC
-    watch.hwClockWrite();
-    Serial.println("RTC updated with NTP time");
     WiFi.disconnect();
+    watch.hwClockWrite();
 }
 
 void wifi_test(void)
@@ -1287,17 +1226,11 @@ void renew_ui_time(void)
 {
     char temp[30] = {0};
 
-    // Always use RTC time for display
-    struct tm rtc_timeinfo;
-    watch.getDateTime(&rtc_timeinfo);  // getDateTime() returns void, fills the struct
-    // Use RTC time
-    show_timeinfo.tm_year = rtc_timeinfo.tm_year;
-    show_timeinfo.tm_hour = rtc_timeinfo.tm_hour;
-    show_timeinfo.tm_mon = rtc_timeinfo.tm_mon;
-    show_timeinfo.tm_min = rtc_timeinfo.tm_min;
-    show_timeinfo.tm_wday = rtc_timeinfo.tm_wday;
-    show_timeinfo.tm_mday = rtc_timeinfo.tm_mday;
-    show_timeinfo.tm_sec = rtc_timeinfo.tm_sec;
+    if (!getLocalTime(&show_timeinfo))
+    {
+        Serial.println("Failed to obtain time");
+        return;
+    }
 
     if (show_timeinfo_old.tm_sec != show_timeinfo.tm_sec)
     {
@@ -1505,19 +1438,21 @@ void lowPowerEnergyHandler()
     {
 
          //setCpuFrequencyMhz(10);
+         //bleKeyboard.end();    
          WiFi.mode(WIFI_OFF);
          //setCpuFrequencyMhz(80);
         // my_print("=========esp_light_sleep_start=========\n");
         while (!pmuIrq && !sportsIrq && !watch.getTouched())
         {
             delay(300); 
-            Serial.println(".");
+            
             // gpio_wakeup_enable ((gpio_num_t)BOARD_TOUCH_INT, GPIO_INTR_LOW_LEVEL);
             // esp_sleep_enable_timer_wakeup(3 * 1000);
             // esp_light_sleep_start();
         }
         // my_print("=========esp_light_sleep_end=========\n");
          // setCpuFrequencyMhz(240);
+          //bleKeyboard.begin();
     }
     watch.setWaveform(2, 15);
     watch.run();
@@ -1545,10 +1480,6 @@ void loop()
     lv_task_handler();
     SensorHandler();
     PMUHandler();
-    get_BattVoltage(); // Update battery info including discharge rate
-    app_batt_voltage_update(); // Update battery app table if active
-    check_alarm(); // Check if alarm should trigger
-    check_timer(); // Check if timer completed and wake screen
     if (standby_en)
     {
         printLocalTime_cont++;
@@ -1617,81 +1548,15 @@ void get_BattVoltage(void)
         if (lastMillis < millis())
         {
             uint8_t charge_status = watch.getChargerStatus();
-            float current_percent = watch.getBatteryPercent();
-            unsigned long current_time = millis();
-            
-            // Calculate discharge rate (only when discharging)
-            extern float last_battery_percent;
-            extern unsigned long last_battery_time;
-            extern float discharge_rate_percent_per_hour;
-            
-            if (!watch.isCharging() && last_battery_percent >= 0 && last_battery_time > 0) {
-                unsigned long time_diff_ms = current_time - last_battery_time;
-                float time_diff_hours = time_diff_ms / 3600000.0f;
-                
-                if (time_diff_hours > 0.1f) { // Update every 6 minutes minimum
-                    float percent_diff = last_battery_percent - current_percent;
-                    if (percent_diff > 0) {
-                        discharge_rate_percent_per_hour = percent_diff / time_diff_hours;
-                    }
-                    last_battery_percent = current_percent;
-                    last_battery_time = current_time;
-                }
-            } else if (watch.isCharging()) {
-                // Reset tracking when charging
-                last_battery_percent = current_percent;
-                last_battery_time = current_time;
-                discharge_rate_percent_per_hour = 0.0f;
-            } else if (last_battery_percent < 0) {
-                // Initialize tracking
-                last_battery_percent = current_percent;
-                last_battery_time = current_time;
-            }
-            
-            // Calculate remaining time
-            float remaining_hours = 0.0f;
-            if (discharge_rate_percent_per_hour > 0.1f && !watch.isCharging()) {
-                remaining_hours = current_percent / discharge_rate_percent_per_hour;
-            }
-            
-            // Calculate discharge rate in mA
-            float discharge_rate_ma = (discharge_rate_percent_per_hour * 470.0f) / 100.0f;
-            
-            // Format output
-            char time_str[32] = "Calculating...";
-            if (watch.isCharging()) {
-                sprintf(time_str, "Charging");
-            } else if (remaining_hours > 0.1f) {
-                int hours = (int)remaining_hours;
-                int minutes = (int)((remaining_hours - hours) * 60);
-                sprintf(time_str, "%dh %dm", hours, minutes);
-            }
-            
-            char rate_str[32] = "Calculating...";
-            if (watch.isCharging()) {
-                sprintf(rate_str, "N/A (Charging)");
-            } else if (discharge_rate_ma > 0.1f) {
-                sprintf(rate_str, "%.1f mA (%.1f%%/h)", discharge_rate_ma, discharge_rate_percent_per_hour);
-            }
-            
-            lv_label_set_text_fmt(batt_voltage_label, 
-                "Charging:%s | Discharge:%s\n"
-                "USB PlugIn:%s | CHG:%s\n"
-                "Battery: %u mV | %d%%\n"
-                "USB: %u mV | SYS: %u mV\n"
-                "#FFFF00 Remaining: %s#\n"
-                "#FF8800 Rate: %s#",
-                watch.isCharging() ? "#00ff00 YES" : "#ff0000 NO",
-                watch.isDischarge() ? "#00ff00 YES" : "#ff0000 NO",
-                watch.isVbusIn() ? "#00ff00 YES" : "#ff0000 NO",
-                chg_status[charge_status],
-                watch.getBattVoltage(),
-                (int)current_percent,
-                watch.getVbusVoltage(),
-                watch.getSystemVoltage(),
-                time_str,
-                rate_str);
-            
+            lv_label_set_text_fmt(batt_voltage_label, "Charging:%s\nDischarge:%s\nUSB PlugIn:%s\nCHG state:%s\nBattery Voltage:%u mV\nUSB Voltage:%u mV\nSYS Voltage:%u mV\nBattery Percent:%d%%",
+                                  watch.isCharging() ? "#00ff00 YES" : "#ff0000 NO",
+                                  watch.isDischarge() ? "#00ff00 YES" : "#ff0000 NO",
+                                  watch.isVbusIn() ? "#00ff00 YES" : "#ff0000 NO",
+                                  chg_status[charge_status],
+                                  watch.getBattVoltage(),
+                                  watch.getVbusVoltage(),
+                                  watch.getSystemVoltage(),
+                                  watch.getBatteryPercent());
             lastMillis = millis() + 1000;
         }
     }
@@ -1836,12 +1701,9 @@ void radio_power_cb(lv_event_t *e)
 void radioTask(lv_timer_t *parent)
 {
     char buf[256];
-    Serial.printf("radioTask running. radioTransmitFlag: %d, transmitFlag: %d\n", radioTransmitFlag, transmitFlag);
-
     // check if the previous operation finished
     if (radioTransmitFlag)
     {
-        Serial.println("radioTransmitFlag is true, processing...");
         // reset flag
         radioTransmitFlag = false;
 
@@ -1850,7 +1712,6 @@ void radioTask(lv_timer_t *parent)
             // TX
             //  the previous operation was transmission, listen for response
             //  print the result
-            Serial.println(F("[Radio] TX done."));
             if (transmissionState == RADIOLIB_ERR_NONE)
             {
                 // packet was successfully sent
@@ -1864,15 +1725,13 @@ void radioTask(lv_timer_t *parent)
 
             lv_snprintf(buf, 256, "[%u]:Tx %s", lv_tick_get() / 1000, transmissionState == RADIOLIB_ERR_NONE ? "Successed" : "Failed");
             set_text_radio_ta(buf);
-            Serial.println(F("[Radio] Transmitting again: 'Hello World!\\r\\n'"));
-            transmissionState = watch.startTransmit("Hello World!\r\n");
+            transmissionState = watch.startTransmit("Hello World!");
         }
         else
         {
             // RX
             // the previous operation was reception
             // print data and send another packet
-            Serial.println(F("[Radio] RX done."));
             String str;
             int state = watch.readData(str);
 
@@ -1896,31 +1755,11 @@ void radioTask(lv_timer_t *parent)
 
                 lv_snprintf(buf, 256, "[%u]:Rx %s \nRSSI:%.2f", lv_tick_get() / 1000, str.c_str(), watch.getRSSI());
                 set_text_radio_ta(buf);
-            } else {
-                Serial.printf("[SX1262] Receive failed, code: %d\n", state);
             }
 
-            Serial.println(F("[Radio] Starting to listen again..."));
             watch.startReceive();
         }
     }
-}
-
-void logRadioParameters() {
-#if defined(LILYGO_TWatch_HAS_RADIO)
-    Serial.println("--- LoRa Parameters ---");
-    Serial.printf("Frequency: %.2f MHz\n", watch.getFrequency());
-    Serial.printf("Bandwidth: %.2f kHz\n", watch.getBandwidth());
-    Serial.printf("Spreading Factor: %d\n", watch.getSpreadingFactor());
-    uint8_t cr = watch.getCodingRate();
-    Serial.printf("Coding Rate: 4/%d\n", cr);
-    Serial.printf("Sync Word: 0x%02X\n", watch.getSyncWord());
-    Serial.printf("Preamble Length: %d\n", watch.getPreambleLength());
-    // These are not gettable, but we know what we set them to.
-    Serial.println("CRC: Disabled");
-    Serial.println("IQ Inversion: Standard (False)");
-    Serial.println("-----------------------");
-#endif
 }
 
 void radio_rxtx_cb(lv_event_t *e)
@@ -1930,15 +1769,15 @@ void radio_rxtx_cb(lv_event_t *e)
     lv_dropdown_get_selected_str(obj, buf, sizeof(buf));
     uint32_t id = lv_dropdown_get_selected(obj);
     Serial.printf("Option: %s id:%u\n", buf, id);
-    logRadioParameters();
     switch (id)
     {
     case 0:
         lv_timer_resume(transmitTask);
         // TX
         // send the first packet on this node
-                    Serial.print(F("[Radio] Sending first packet ... "));
-                    transmissionState = watch.startTransmit("Hello World!\r\n");        transmitFlag = true;
+        Serial.print(F("[Radio] Sending first packet ... "));
+        transmissionState = watch.startTransmit("Hello World!");
+        transmitFlag = true;
 
         break;
     case 1:

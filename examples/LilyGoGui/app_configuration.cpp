@@ -1,11 +1,8 @@
 #include "app_configuration.h"
 #include "Arduino.h"
 #include <LilyGoLib.h>
-#include "ui.h"
-#include "global_flags.h"
 
 static void sleep_event_cb(lv_event_t *e);
-static void dark_mode_event_cb(lv_event_t *e);
 extern LilyGoLib watch;
 
 static void slider_event_cb(lv_event_t *e)
@@ -19,10 +16,9 @@ static void slider_event_cb(lv_event_t *e)
 }
 
 void app_configuration_load(lv_obj_t *cont) {
-  // Deep Sleep Button
   lv_obj_t *btn = lv_btn_create(cont);
   lv_obj_set_size(btn, 100, 50);
-  lv_obj_align(btn, LV_ALIGN_CENTER, -60, -60);
+  lv_obj_align(btn, LV_ALIGN_CENTER, 0, -40);
   lv_obj_set_style_outline_color(btn, lv_color_white(), LV_STATE_FOCUS_KEY);
   lv_obj_set_style_bg_color(btn, lv_color_white(), 0);
 
@@ -31,19 +27,6 @@ void app_configuration_load(lv_obj_t *cont) {
   lv_obj_set_style_text_color(label, lv_color_black(), 0);
   lv_label_set_text(label, "Deep Sleep");
   lv_obj_add_event_cb(btn, sleep_event_cb, LV_EVENT_CLICKED, NULL);
-  
-  // Dark Mode Toggle Switch
-  lv_obj_t *dark_mode_label = lv_label_create(cont);
-  lv_label_set_text(dark_mode_label, "Dark Mode\n(Save Battery)");
-  lv_obj_set_style_text_align(dark_mode_label, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_set_style_text_font(dark_mode_label, &lv_font_montserrat_12, 0);
-  lv_obj_align(dark_mode_label, LV_ALIGN_CENTER, 60, -70);
-  
-  lv_obj_t *dark_mode_switch = lv_switch_create(cont);
-  lv_obj_set_size(dark_mode_switch, 50, 25);
-  lv_obj_align(dark_mode_switch, LV_ALIGN_CENTER, 60, -30);
-  if (dark_mode_enabled) lv_obj_add_state(dark_mode_switch, LV_STATE_CHECKED);
-  lv_obj_add_event_cb(dark_mode_switch, dark_mode_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
 
   static lv_style_t style_indicator;
   static lv_style_t style_knob;
@@ -88,14 +71,6 @@ void app_configuration_load(lv_obj_t *cont) {
 void lowPowerEnergyHandler();
 static void sleep_event_cb(lv_event_t *e) {
     lowPowerEnergyHandler();
-}
-
-static void dark_mode_event_cb(lv_event_t *e) {
-    lv_obj_t *toggle = lv_event_get_target(e);
-    dark_mode_enabled = lv_obj_has_state(toggle, LV_STATE_CHECKED);
-    Serial.printf("Dark mode %s\n", dark_mode_enabled ? "enabled" : "disabled");
-    apply_theme();
-    lv_task_handler(); // Process LVGL tasks to avoid crashes
 }
 
 app_t app_config = {

@@ -5,6 +5,8 @@
 #include <AudioFileSourcePROGMEM.h>
 #include <AudioGeneratorMP3.h>
 #include <AudioOutputI2S.h>
+#include <SD_MMC.h>
+#include <vector>
 
 // Sound system - external MP3 arrays
 extern const unsigned char mp3_array[16509];
@@ -32,8 +34,9 @@ enum RecurrenceType {
     RECUR_CUSTOM = 4
 };
 
-// Alarm data structure
+// Alarm data structure - now with unique ID for storage
 struct AlarmData {
+    int id;  // Unique alarm ID
     bool enabled;
     uint8_t hour;
     uint8_t minute;
@@ -64,9 +67,12 @@ struct TimerData {
 };
 
 // Global state
-static AlarmData g_alarm = {false, 0, 0, RECUR_ONCE, {false}, SOUND_BEEP, true, true};
+static std::vector<AlarmData> g_alarms;  // List of all alarms
+static int next_alarm_id = 1;  // Counter for unique alarm IDs
 static StopwatchData g_stopwatch = {false, 0, 0, {0}, 0, true};
 static TimerData g_timer = {false, 0, 0, SOUND_BEEP, true};
+static bool timer_just_completed = false;  // Flag to track if timer completed while screen was off
+static int triggered_alarm_id = -1;  // ID of alarm that just triggered
 
 // UI objects
 static lv_obj_t *main_tabview = nullptr;
@@ -77,14 +83,198 @@ SensorPCF8563 rtc;
 void create_alarm_tab(lv_obj_t *parent);
 void create_stopwatch_tab(lv_obj_t *parent);
 void create_timer_tab(lv_obj_t *parent);
+void load_alarms_from_storage();
+void save_alarms_to_storage();
+void add_new_alarm(uint8_t hour, uint8_t minute, RecurrenceType recur, bool days[7], AlarmSound sound, bool sound_enabled);
+void delete_alarm(int alarm_id);
+void refresh_alarm_list_ui();
 void init_alarm_audio();
 void play_alarm_sound(AlarmSound sound, int repeat_count = 3);
 
+#define ALARM_STORAGE_FILE "/alarms.txt"
+
+// ==================== PERSISTENT STORAGE ====================
+void load_alarms_from_storage() {
+    g_alarms.clear();
+    
+    File file = SD_MMC.open(ALARM_STORAGE_FILE, FILE_READ);
+    if (!file) {
+        Serial.println("No alarm file found, starting fresh");
+        return;
+    }
+    
+    while (file.available()) {
+        String line = file.readStringUntil('\n');
+        line.trim();
+        if (line.length() == 0) continue;
+        
+        // Parse format: id,enabled,hour,minute,recur,days[7],sound,sound_enabled
+        int idx = 0;
+        AlarmData alarm;
+        alarm.id = line.substring(idx, line.indexOf(',', idx)).toInt();
+        idx = line.indexOf(',', idx) + 1;
+        
+        alarm.enabled = line.substring(idx, line.indexOf(',', idx)).toInt();
+        idx = line.indexOf(',', idx) + 1;
+        
+        alarm.hour = line.substring(idx, line.indexOf(',', idx)).toInt();
+        idx = line.indexOf(',', idx) + 1;
+        
+        alarm.minute = line.substring(idx, line.indexOf(',', idx)).toInt();
+        idx = line.indexOf(',', idx) + 1;
+        
+        alarm.recurrence = (RecurrenceType)line.substring(idx, line.indexOf(',', idx)).toInt();
+        idx = line.indexOf(',', idx) + 1;
+        
+        for (int i = 0; i < 7; i++) {
+            alarm.days[i] = line.substring(idx, line.indexOf(',', idx)).toInt();
+            idx = line.indexOf(',', idx) + 1;
+        }
+        
+        alarm.sound = (AlarmSound)line.substring(idx, line.indexOf(',', idx)).toInt();
+        idx = line.indexOf(',', idx) + 1;
+        
+        alarm.sound_enabled = line.substring(idx).toInt();
+        alarm.vibrate = true;  // Always vibrate
+        
+        g_alarms.push_back(alarm);
+        if (alarm.id >= next_alarm_id) {
+            next_alarm_id = alarm.id + 1;
+        }
+    }
+    
+    file.close();
+    Serial.printf("Loaded %d alarms from storage\n", g_alarms.size());
+}
+
+void save_alarms_to_storage() {
+    File file = SD_MMC.open(ALARM_STORAGE_FILE, FILE_WRITE);
+    if (!file) {
+        Serial.println("Failed to open alarm file for writing");
+        return;
+    }
+    
+    for (const auto& alarm : g_alarms) {
+        file.printf("%d,%d,%d,%d,%d,", alarm.id, alarm.enabled, alarm.hour, alarm.minute, alarm.recurrence);
+        for (int i = 0; i < 7; i++) {
+            file.printf("%d,", alarm.days[i]);
+        }
+        file.printf("%d,%d\n", alarm.sound, alarm.sound_enabled);
+    }
+    
+    file.close();
+    Serial.printf("Saved %d alarms to storage\n", g_alarms.size());
+}
+
+void add_new_alarm(uint8_t hour, uint8_t minute, RecurrenceType recur, bool days[7], AlarmSound sound, bool sound_enabled) {
+    AlarmData new_alarm;
+    new_alarm.id = next_alarm_id++;
+    new_alarm.enabled = true;
+    new_alarm.hour = hour;
+    new_alarm.minute = minute;
+    new_alarm.recurrence = recur;
+    for (int i = 0; i < 7; i++) {
+        new_alarm.days[i] = days[i];
+    }
+    new_alarm.sound = sound;
+    new_alarm.vibrate = true;
+    new_alarm.sound_enabled = sound_enabled;
+    
+    g_alarms.push_back(new_alarm);
+    save_alarms_to_storage();
+    Serial.printf("Added alarm #%d for %02d:%02d\n", new_alarm.id, hour, minute);
+}
+
+void delete_alarm(int alarm_id) {
+    for (auto it = g_alarms.begin(); it != g_alarms.end(); ++it) {
+        if (it->id == alarm_id) {
+            Serial.printf("Deleting alarm #%d\n", alarm_id);
+            g_alarms.erase(it);
+            save_alarms_to_storage();
+            return;
+        }
+    }
+}
+
+void toggle_alarm(int alarm_id) {
+    for (auto& alarm : g_alarms) {
+        if (alarm.id == alarm_id) {
+            alarm.enabled = !alarm.enabled;
+            save_alarms_to_storage();
+            Serial.printf("Alarm #%d %s\n", alarm_id, alarm.enabled ? "enabled" : "disabled");
+            return;
+        }
+    }
+}
+
 // ==================== ALARM TAB ====================
+static lv_obj_t *alarm_list_container = nullptr;
+static lv_obj_t *parent_alarm_tab = nullptr;
+
+void refresh_alarm_list_ui() {
+    if (!alarm_list_container || !parent_alarm_tab) return;
+    
+    // Clear existing list
+    lv_obj_clean(alarm_list_container);
+    
+    int y_pos = 5;
+    
+    // Show all alarms
+    for (const auto& alarm : g_alarms) {
+        lv_obj_t *alarm_item = lv_obj_create(alarm_list_container);
+        lv_obj_set_size(alarm_item, 220, 50);
+        lv_obj_set_pos(alarm_item, 0, y_pos);
+        lv_obj_clear_flag(alarm_item, LV_OBJ_FLAG_SCROLLABLE);
+        
+        // Time label (large)
+        lv_obj_t *time_label = lv_label_create(alarm_item);
+        char time_str[10];
+        sprintf(time_str, "%02d:%02d", alarm.hour, alarm.minute);
+        lv_label_set_text(time_label, time_str);
+        lv_obj_set_style_text_font(time_label, &lv_font_montserrat_24, 0);
+        lv_obj_set_pos(time_label, 5, 5);
+        
+        // Recurrence info (small)
+        lv_obj_t *recur_label = lv_label_create(alarm_item);
+        const char *recur_text[] = {"Once", "Daily", "Weekdays", "Weekends", "Custom"};
+        lv_label_set_text(recur_label, recur_text[alarm.recurrence]);
+        lv_obj_set_style_text_font(recur_label, &lv_font_montserrat_10, 0);
+        lv_obj_set_pos(recur_label, 5, 30);
+        
+        // Enable/Disable switch
+        lv_obj_t *toggle = lv_switch_create(alarm_item);
+        lv_obj_set_size(toggle, 40, 20);
+        lv_obj_set_pos(toggle, 90, 8);
+        if (alarm.enabled) lv_obj_add_state(toggle, LV_STATE_CHECKED);
+        lv_obj_set_user_data(toggle, (void*)(intptr_t)alarm.id);
+        lv_obj_add_event_cb(toggle, [](lv_event_t *e) {
+            int id = (int)(intptr_t)lv_obj_get_user_data(lv_event_get_target(e));
+            toggle_alarm(id);
+        }, LV_EVENT_VALUE_CHANGED, NULL);
+        
+        // Delete button
+        lv_obj_t *del_btn = lv_btn_create(alarm_item);
+        lv_obj_set_size(del_btn, 50, 36);
+        lv_obj_set_pos(del_btn, 160, 7);
+        lv_obj_t *del_label = lv_label_create(del_btn);
+        lv_label_set_text(del_label, "Del");
+        lv_obj_center(del_label);
+        lv_obj_set_user_data(del_btn, (void*)(intptr_t)alarm.id);
+        lv_obj_add_event_cb(del_btn, [](lv_event_t *e) {
+            int id = (int)(intptr_t)lv_obj_get_user_data(lv_event_get_target(e));
+            delete_alarm(id);
+            refresh_alarm_list_ui();
+        }, LV_EVENT_CLICKED, NULL);
+        
+        y_pos += 55;
+    }
+    
+    // Update container height
+    lv_obj_set_height(alarm_list_container, y_pos + 10);
+}
+
 void create_alarm_tab(lv_obj_t *parent) {
-    static lv_obj_t *hour_roller, *minute_roller, *recur_dropdown, *sound_dropdown;
-    static lv_obj_t *status_label;
-    static lv_obj_t *day_checkboxes[7];
+    parent_alarm_tab = parent;
     
     // Create scrollable container
     lv_obj_set_scrollbar_mode(parent, LV_SCROLLBAR_MODE_AUTO);
@@ -92,149 +282,121 @@ void create_alarm_tab(lv_obj_t *parent) {
     
     int y_pos = 0;
     
-    // Status label at top
-    status_label = lv_label_create(parent);
-    lv_label_set_text(status_label, g_alarm.enabled ? "#00FF00 Alarm Active#" : "#808080 Alarm Off#");
-    lv_label_set_recolor(status_label, true);
-    lv_obj_set_pos(status_label, 50, y_pos);
-    y_pos += 22;
+    // Title
+    lv_obj_t *title_label = lv_label_create(parent);
+    lv_label_set_text(title_label, "Alarms");
+    lv_obj_set_style_text_font(title_label, &lv_font_montserrat_20, 0);
+    lv_obj_set_pos(title_label, 80, y_pos);
+    y_pos += 28;
     
-    // Time selectors - BIGGER rollers
-    lv_obj_t *time_cont = lv_obj_create(parent);
-    lv_obj_set_size(time_cont, 220, 85);
-    lv_obj_set_pos(time_cont, 0, y_pos);
-    lv_obj_set_style_pad_all(time_cont, 2, 0);
-    lv_obj_clear_flag(time_cont, LV_OBJ_FLAG_SCROLLABLE);
+    // Quick Add section title
+    lv_obj_t *quick_title = lv_label_create(parent);
+    lv_label_set_text(quick_title, "Quick Add:");
+    lv_obj_set_style_text_font(quick_title, &lv_font_montserrat_12, 0);
+    lv_obj_set_pos(quick_title, 5, y_pos);
+    y_pos += 18;
     
-    hour_roller = lv_roller_create(time_cont);
-    lv_roller_set_options(hour_roller, "00\n01\n02\n03\n04\n05\n06\n07\n08\n09\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23", LV_ROLLER_MODE_INFINITE);
-    lv_obj_set_size(hour_roller, 80, 78);
-    lv_obj_align(hour_roller, LV_ALIGN_LEFT_MID, 2, 0);
-    lv_roller_set_selected(hour_roller, g_alarm.hour, LV_ANIM_OFF);
-    lv_roller_set_visible_row_count(hour_roller, 3);
-    
-    lv_obj_t *colon = lv_label_create(time_cont);
-    lv_label_set_text(colon, ":");
-    lv_obj_set_style_text_font(colon, &lv_font_montserrat_32, 0);
-    lv_obj_center(colon);
-    
-    minute_roller = lv_roller_create(time_cont);
-    lv_roller_set_options(minute_roller, "00\n05\n10\n15\n20\n25\n30\n35\n40\n45\n50\n55", LV_ROLLER_MODE_INFINITE);
-    lv_obj_set_size(minute_roller, 80, 78);
-    lv_obj_align(minute_roller, LV_ALIGN_RIGHT_MID, -2, 0);
-    lv_roller_set_selected(minute_roller, g_alarm.minute / 5, LV_ANIM_OFF);
-    lv_roller_set_visible_row_count(minute_roller, 3);
-    
-    y_pos += 90;
-    
-    // Recurrence selector
-    lv_obj_t *recur_label = lv_label_create(parent);
-    lv_label_set_text(recur_label, "Repeat:");
-    lv_obj_set_pos(recur_label, 0, y_pos + 3);
-    
-    recur_dropdown = lv_dropdown_create(parent);
-    lv_dropdown_set_options(recur_dropdown, "Once\nDaily\nWeekdays\nWeekends\nCustom");
-    lv_obj_set_size(recur_dropdown, 170, 30);
-    lv_obj_set_pos(recur_dropdown, 50, y_pos);
-    lv_dropdown_set_selected(recur_dropdown, g_alarm.recurrence);
-    
-    y_pos += 38;
-    
-    // Sound selector
-    lv_obj_t *sound_label = lv_label_create(parent);
-    lv_label_set_text(sound_label, "Sound:");
-    lv_obj_set_pos(sound_label, 0, y_pos + 3);
-    
-    sound_dropdown = lv_dropdown_create(parent);
-    lv_dropdown_set_options(sound_dropdown, "Vibrate\nBeep\nRing\nMelody");
-    lv_obj_set_size(sound_dropdown, 170, 30);
-    lv_obj_set_pos(sound_dropdown, 50, y_pos);
-    lv_dropdown_set_selected(sound_dropdown, g_alarm.sound);
-    
-    y_pos += 38;
-    
-    // Sound ON/OFF toggle
-    lv_obj_t *sound_toggle = lv_switch_create(parent);
-    lv_obj_set_size(sound_toggle, 50, 25);
-    lv_obj_set_pos(sound_toggle, 0, y_pos);
-    if (g_alarm.sound_enabled) lv_obj_add_state(sound_toggle, LV_STATE_CHECKED);
-    
-    lv_obj_t *sound_toggle_label = lv_label_create(parent);
-    lv_label_set_text(sound_toggle_label, "Sound ON");
-    lv_obj_set_pos(sound_toggle_label, 55, y_pos + 3);
-    
-    lv_obj_add_event_cb(sound_toggle, [](lv_event_t *e) {
-        g_alarm.sound_enabled = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
-        Serial.printf("Alarm sound: %s\n", g_alarm.sound_enabled ? "ON" : "OFF");
-    }, LV_EVENT_VALUE_CHANGED, NULL);
-    
-    y_pos += 33;
-    
-    // Day checkboxes (for custom recurrence)
-    lv_obj_t *days_label = lv_label_create(parent);
-    lv_label_set_text(days_label, "Custom Days:");
-    lv_obj_set_pos(days_label, 0, y_pos);
-    y_pos += 22;
-    
-    const char *day_names[] = {"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"};
-    for (int i = 0; i < 7; i++) {
-        day_checkboxes[i] = lv_checkbox_create(parent);
-        lv_checkbox_set_text(day_checkboxes[i], day_names[i]);
-        lv_obj_set_size(day_checkboxes[i], 55, 24);
-        lv_obj_set_pos(day_checkboxes[i], 0 + (i % 4) * 56, y_pos + (i / 4) * 28);
-        if (g_alarm.days[i]) lv_obj_add_state(day_checkboxes[i], LV_STATE_CHECKED);
-    }
-    
-    y_pos += 62;
-    
-    // Buttons container
-    lv_obj_t *btn_cont = lv_obj_create(parent);
-    lv_obj_set_size(btn_cont, 220, 42);
-    lv_obj_set_pos(btn_cont, 0, y_pos);
-    lv_obj_set_style_pad_all(btn_cont, 2, 0);
-    lv_obj_clear_flag(btn_cont, LV_OBJ_FLAG_SCROLLABLE);
-    
-    // Set Alarm button
-    lv_obj_t *set_btn = lv_btn_create(btn_cont);
-    lv_obj_set_size(set_btn, 102, 36);
-    lv_obj_align(set_btn, LV_ALIGN_LEFT_MID, 0, 0);
-    lv_obj_t *set_label = lv_label_create(set_btn);
-    lv_label_set_text(set_label, g_alarm.enabled ? "Disable" : "Enable");
-    lv_obj_center(set_label);
-    
-    lv_obj_add_event_cb(set_btn, [](lv_event_t *e) {
-        lv_obj_t *hour_r = (lv_obj_t*)lv_event_get_user_data(e);
-        lv_obj_t *parent = lv_obj_get_parent(lv_event_get_target(e));
-        lv_obj_t *minute_r = (lv_obj_t*)lv_obj_get_user_data(parent);
-        
-        g_alarm.enabled = !g_alarm.enabled;
-        lv_obj_t *label = lv_obj_get_child(lv_event_get_target(e), 0);
-        lv_label_set_text(label, g_alarm.enabled ? "Disable" : "Enable");
-        
-        if (g_alarm.enabled) {
-            g_alarm.hour = lv_roller_get_selected(hour_r);
-            g_alarm.minute = lv_roller_get_selected(minute_r) * 5;
-            Serial.printf("Alarm set for %02d:%02d\n", g_alarm.hour, g_alarm.minute);
-        }
-    }, LV_EVENT_CLICKED, hour_roller);
-    lv_obj_set_user_data(btn_cont, minute_roller);
-    
-    // Test Sound button
-    lv_obj_t *test_btn = lv_btn_create(btn_cont);
-    lv_obj_set_size(test_btn, 102, 36);
-    lv_obj_align(test_btn, LV_ALIGN_RIGHT_MID, 0, 0);
-    lv_obj_t *test_label = lv_label_create(test_btn);
-    lv_label_set_text(test_label, "Test");
-    lv_obj_center(test_label);
-    
-    lv_obj_add_event_cb(test_btn, [](lv_event_t *e) {
-        if (g_alarm.sound_enabled) {
-            play_alarm_sound(g_alarm.sound, 2);  // Test with 2 repetitions
-        }
+    // Quick-add button 1: Morning Alarm (7:00 AM Daily)
+    lv_obj_t *add_btn1 = lv_btn_create(parent);
+    lv_obj_set_size(add_btn1, 105, 32);
+    lv_obj_set_pos(add_btn1, 0, y_pos);
+    lv_obj_t *add_label1 = lv_label_create(add_btn1);
+    lv_label_set_text(add_label1, "7:00 AM");
+    lv_obj_set_style_text_font(add_label1, &lv_font_montserrat_10, 0);
+    lv_obj_center(add_label1);
+    lv_obj_add_event_cb(add_btn1, [](lv_event_t *e) {
+        bool days[7] = {false};
+        add_new_alarm(7, 0, RECUR_DAILY, days, SOUND_BEEP, true);
+        refresh_alarm_list_ui();
     }, LV_EVENT_CLICKED, NULL);
     
-    // Set content height for scrolling
-    y_pos += 48;
+    // Quick-add button 2: Work Alarm (8:30 AM Weekdays)
+    lv_obj_t *add_btn2 = lv_btn_create(parent);
+    lv_obj_set_size(add_btn2, 105, 32);
+    lv_obj_set_pos(add_btn2, 115, y_pos);
+    lv_obj_t *add_label2 = lv_label_create(add_btn2);
+    lv_label_set_text(add_label2, "8:30 Work");
+    lv_obj_set_style_text_font(add_label2, &lv_font_montserrat_10, 0);
+    lv_obj_center(add_label2);
+    lv_obj_add_event_cb(add_btn2, [](lv_event_t *e) {
+        bool days[7] = {false};
+        add_new_alarm(8, 30, RECUR_WEEKDAYS, days, SOUND_RING, true);
+        refresh_alarm_list_ui();
+    }, LV_EVENT_CLICKED, NULL);
+    
+    y_pos += 36;
+    
+    // Quick-add button 3: Afternoon Reminder (12:00 PM Daily)
+    lv_obj_t *add_btn3 = lv_btn_create(parent);
+    lv_obj_set_size(add_btn3, 105, 32);
+    lv_obj_set_pos(add_btn3, 0, y_pos);
+    lv_obj_t *add_label3 = lv_label_create(add_btn3);
+    lv_label_set_text(add_label3, "12:00 PM");
+    lv_obj_set_style_text_font(add_label3, &lv_font_montserrat_10, 0);
+    lv_obj_center(add_label3);
+    lv_obj_add_event_cb(add_btn3, [](lv_event_t *e) {
+        bool days[7] = {false};
+        add_new_alarm(12, 0, RECUR_DAILY, days, SOUND_BEEP, true);
+        refresh_alarm_list_ui();
+    }, LV_EVENT_CLICKED, NULL);
+    
+    // Quick-add button 4: Evening Reminder (6:00 PM Daily)
+    lv_obj_t *add_btn4 = lv_btn_create(parent);
+    lv_obj_set_size(add_btn4, 105, 32);
+    lv_obj_set_pos(add_btn4, 115, y_pos);
+    lv_obj_t *add_label4 = lv_label_create(add_btn4);
+    lv_label_set_text(add_label4, "6:00 PM");
+    lv_obj_set_style_text_font(add_label4, &lv_font_montserrat_10, 0);
+    lv_obj_center(add_label4);
+    lv_obj_add_event_cb(add_btn4, [](lv_event_t *e) {
+        bool days[7] = {false};
+        add_new_alarm(18, 0, RECUR_DAILY, days, SOUND_BEEP, true);
+        refresh_alarm_list_ui();
+    }, LV_EVENT_CLICKED, NULL);
+    
+    y_pos += 36;
+    
+    // Quick-add button 5: Bedtime Reminder (10:00 PM Daily)
+    lv_obj_t *add_btn5 = lv_btn_create(parent);
+    lv_obj_set_size(add_btn5, 105, 32);
+    lv_obj_set_pos(add_btn5, 0, y_pos);
+    lv_obj_t *add_label5 = lv_label_create(add_btn5);
+    lv_label_set_text(add_label5, "10:00 PM");
+    lv_obj_set_style_text_font(add_label5, &lv_font_montserrat_10, 0);
+    lv_obj_center(add_label5);
+    lv_obj_add_event_cb(add_btn5, [](lv_event_t *e) {
+        bool days[7] = {false};
+        add_new_alarm(22, 0, RECUR_DAILY, days, SOUND_BEEP, true);
+        refresh_alarm_list_ui();
+    }, LV_EVENT_CLICKED, NULL);
+    
+    // Quick-add button 6: Weekend Alarm (9:00 AM Weekends)
+    lv_obj_t *add_btn6 = lv_btn_create(parent);
+    lv_obj_set_size(add_btn6, 105, 32);
+    lv_obj_set_pos(add_btn6, 115, y_pos);
+    lv_obj_t *add_label6 = lv_label_create(add_btn6);
+    lv_label_set_text(add_label6, "9:00 Weekend");
+    lv_obj_set_style_text_font(add_label6, &lv_font_montserrat_10, 0);
+    lv_obj_center(add_label6);
+    lv_obj_add_event_cb(add_btn6, [](lv_event_t *e) {
+        bool days[7] = {false};
+        add_new_alarm(9, 0, RECUR_WEEKENDS, days, SOUND_BEEP, true);
+        refresh_alarm_list_ui();
+    }, LV_EVENT_CLICKED, NULL);
+    
+    y_pos += 40;
+    
+    // Alarm list container
+    alarm_list_container = lv_obj_create(parent);
+    lv_obj_set_size(alarm_list_container, 220, 130);  // Fixed height for list
+    lv_obj_set_pos(alarm_list_container, 0, y_pos);
+    lv_obj_set_scrollbar_mode(alarm_list_container, LV_SCROLLBAR_MODE_AUTO);
+    lv_obj_set_scroll_dir(alarm_list_container, LV_DIR_VER);
+    
+    // Populate alarm list
+    refresh_alarm_list_ui();
+    
+    y_pos += 135;
     lv_obj_set_height(parent, y_pos);
 }
 
@@ -404,7 +566,7 @@ void create_timer_tab(lv_obj_t *parent) {
     lv_roller_set_visible_row_count(hour_roller, 3);
     
     min_roller = lv_roller_create(time_cont);
-    lv_roller_set_options(min_roller, "00\n05\n10\n15\n20\n25\n30\n35\n40\n45\n50\n55", LV_ROLLER_MODE_INFINITE);
+    lv_roller_set_options(min_roller, "00\n01\n02\n03\n04\n05\n06\n07\n08\n09\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n31\n32\n33\n34\n35\n36\n37\n38\n39\n40\n41\n42\n43\n44\n45\n46\n47\n48\n49\n50\n51\n52\n53\n54\n55\n56\n57\n58\n59", LV_ROLLER_MODE_INFINITE);
     lv_obj_set_size(min_roller, 65, 74);
     lv_obj_center(min_roller);
     lv_roller_set_visible_row_count(min_roller, 3);
@@ -474,7 +636,7 @@ void create_timer_tab(lv_obj_t *parent) {
         if (!g_timer.running) {
             // Start timer
             uint16_t hours = lv_roller_get_selected(rollers->hour);
-            uint16_t mins = lv_roller_get_selected(rollers->min) * 5;
+            uint16_t mins = lv_roller_get_selected(rollers->min);  // Now single minutes, not * 5
             uint16_t secs = lv_roller_get_selected(rollers->sec) * 15;
             g_timer.duration_ms = (hours * 3600 + mins * 60 + secs) * 1000;
             
@@ -501,30 +663,18 @@ void create_timer_tab(lv_obj_t *parent) {
     static lv_timer_t *update_timer = nullptr;
     if (update_timer) lv_timer_del(update_timer);
     update_timer = lv_timer_create([](lv_timer_t *timer) {
-        extern LilyGoLib watch;
         lv_obj_t *label = (lv_obj_t*)timer->user_data;
         if (g_timer.running) {
             unsigned long elapsed = millis() - g_timer.start_time;
             if (elapsed >= g_timer.duration_ms) {
-                // Timer finished - BEEP AND VIBRATE!
+                // Timer finished - mark as completed
                 g_timer.running = false;
-                
-                // Strong vibration pattern
-                watch.setWaveform(0, 47);  // Strong buzz
-                watch.setWaveform(1, 47);  // Strong buzz again
-                watch.setWaveform(2, 47);  // Strong buzz again
-                watch.setWaveform(3, 0);
-                watch.run();
-                
-                // Play alarm sound multiple times if enabled
-                if (g_timer.sound_enabled) {
-                    play_alarm_sound(g_timer.sound, 5);  // Play 5 times for timer
-                }
+                timer_just_completed = true;  // Set flag for check_timer to handle wake-up
                 
                 lv_label_set_text(label, "#FF0000 DONE!#");
                 lv_label_set_recolor(label, true);
                 
-                Serial.println("TIMER FINISHED!");
+                Serial.println("TIMER FINISHED! Flagged for screen wake-up.");
             } else {
                 unsigned long remaining = g_timer.duration_ms - elapsed;
                 char time_str[16];
@@ -630,6 +780,9 @@ void play_alarm_sound(AlarmSound sound, int repeat_count) {
 }
 
 void app_alarm_load(lv_obj_t *cont) {
+    // Load alarms from persistent storage
+    load_alarms_from_storage();
+    
     // Create tabview with 3 tabs - Extended by 20px for more room
     main_tabview = lv_tabview_create(cont, LV_DIR_TOP, 26);
     lv_obj_set_size(main_tabview, 240, 220);  // 220px height leaves 20px for back button
@@ -646,12 +799,80 @@ void app_alarm_load(lv_obj_t *cont) {
     create_timer_tab(tab_timer);
 }
 
+// Check timer completion in main loop - wakes screen when timer finishes
+void check_timer() {
+    extern LilyGoLib watch;
+    
+    // Check if timer just completed
+    if (timer_just_completed) {
+        timer_just_completed = false;  // Reset flag
+        
+        Serial.println("Timer completed - waking screen and triggering alert!");
+        
+        // Wake up the screen
+        lv_disp_trig_activity(NULL);
+        
+        // Set brightness to visible level
+        watch.incrementalBrightness(128);  // Medium brightness
+        
+        // Strong vibration pattern
+        watch.setWaveform(0, 47);  // Strong buzz
+        watch.setWaveform(1, 47);  // Strong buzz again
+        watch.setWaveform(2, 47);  // Strong buzz again
+        watch.setWaveform(3, 0);
+        watch.run();
+        
+        // Play alarm sound multiple times if enabled
+        if (g_timer.sound_enabled) {
+            play_alarm_sound(g_timer.sound, 5);  // Play 5 times for timer
+        }
+        
+        // Note: The timer tab will already show "DONE!" from the LVGL timer update
+    }
+}
+
 // Check alarm in main loop - call this from LilyGoGui.ino loop()
 void check_alarm() {
     extern LilyGoLib watch;
     
-    if (!g_alarm.enabled) return;
+    // First, check if an alarm just triggered (wake up screen)
+    if (triggered_alarm_id >= 0) {
+        Serial.printf("Alarm #%d triggered - waking screen!\n", triggered_alarm_id);
+        
+        // Wake up the screen
+        lv_disp_trig_activity(NULL);
+        watch.incrementalBrightness(128);  // Medium brightness
+        
+        // Find the alarm
+        for (auto& alarm : g_alarms) {
+            if (alarm.id == triggered_alarm_id) {
+                // Strong vibration
+                watch.setWaveform(0, 47);
+                watch.setWaveform(1, 47);
+                watch.setWaveform(2, 47);
+                watch.setWaveform(3, 0);
+                watch.run();
+                
+                // Play sound if enabled
+                if (alarm.sound_enabled) {
+                    play_alarm_sound(alarm.sound, 5);
+                }
+                
+                // If once, disable it
+                if (alarm.recurrence == RECUR_ONCE) {
+                    alarm.enabled = false;
+                    save_alarms_to_storage();
+                }
+                break;
+            }
+        }
+        
+        triggered_alarm_id = -1;  // Reset flag
+        refresh_alarm_list_ui();  // Update UI
+        return;
+    }
     
+    // Check all enabled alarms
     RTC_DateTime now = watch.getDateTime();
     static uint8_t last_minute = 255;
     
@@ -659,13 +880,15 @@ void check_alarm() {
     if (now.minute == last_minute) return;
     last_minute = now.minute;
     
-    if (now.hour == g_alarm.hour && now.minute == g_alarm.minute) {
+    for (auto& alarm : g_alarms) {
+        if (!alarm.enabled) continue;
+        if (alarm.hour != now.hour || alarm.minute != now.minute) continue;
+        
         // Check recurrence
         bool should_trigger = false;
-        switch (g_alarm.recurrence) {
+        switch (alarm.recurrence) {
             case RECUR_ONCE:
                 should_trigger = true;
-                g_alarm.enabled = false; // Disable after triggering
                 break;
             case RECUR_DAILY:
                 should_trigger = true;
@@ -677,15 +900,14 @@ void check_alarm() {
                 should_trigger = (now.week == 0 || now.week == 6);
                 break;
             case RECUR_CUSTOM:
-                should_trigger = g_alarm.days[now.week];
+                should_trigger = alarm.days[now.week];
                 break;
         }
         
         if (should_trigger) {
-            if (g_alarm.sound_enabled) {
-                play_alarm_sound(g_alarm.sound, 5);  // Repeat 5 times for actual alarm
-            }
-            Serial.println("ALARM TRIGGERED!");
+            triggered_alarm_id = alarm.id;  // Set flag for wake-up
+            Serial.printf("Alarm #%d should trigger!\n", alarm.id);
+            return;  // Handle in next loop iteration
         }
     }
 }

@@ -16,10 +16,11 @@
 #include "app_mouse.h"
 #include "app_keyboard.h"
 #include "app_alarm.h"
-#include <vector>
 
+KeyboardDevice *keyboard;
+MouseDevice *mouse;
 
-
+BleCompositeHID bleComposite("T-Watch", "LILYGO", 100);
 LV_FONT_DECLARE(alibaba_font);
 LV_IMG_DECLARE(lilygo2_gif);
 
@@ -38,31 +39,43 @@ LV_IMG_DECLARE(img_radio);
 LV_IMG_DECLARE(img_mouse);
 LV_IMG_DECLARE(key_img);
 
-
 static lv_style_t style_frameless;
 static lv_obj_t *main_screen;
 static lv_group_t *menu_g, *app_g;
 static lv_indev_t *indev;
-static std::vector<lv_obj_t*> icon_refs;
-void menu_name_label_event_cb(lv_event_t *e);
-static lv_obj_t *create_icon(lv_obj_t *parent, const lv_img_dsc_t *img);
-static lv_obj_t *create_return_button(lv_obj_t *parent, app_t *func_cb);
-
-/*
-void ui_boot_anim() {
-  lv_obj_t *logo_img = lv_gif_create(lv_scr_act());
-  lv_obj_center(logo_img);
-  lv_gif_set_src(logo_img, &lilygo2_gif);
-  LV_DELAY(500);
-  lv_obj_del(logo_img);
-}
-*/
 
 extern lv_obj_t *chart;
 extern lv_obj_t * step_counter_label;
 extern lv_obj_t * batt_voltage_label;
 extern lv_timer_t *transmitTask;
 extern void suspend_vadTaskHandler(void);
+
+
+void common_back_button_event_handler(lv_event_t *e) {
+    lv_obj_t *parent = lv_obj_get_parent(lv_event_get_target(e));
+    app_t *exit_func_cb = (app_t *)lv_event_get_user_data(e);
+    if (exit_func_cb != nullptr && exit_func_cb->exit_func_cb != nullptr) { /* Execute callback on exit */
+        (*exit_func_cb->exit_func_cb)(parent);
+    }
+    lv_group_set_default(menu_g);
+    lv_indev_set_group(indev, menu_g);
+    lv_obj_clean(parent);
+    lv_obj_set_tile_id(main_screen, 0, 0, LV_ANIM_ON);
+    if(chart != NULL)
+    {
+        chart = NULL;
+        suspend_vadTaskHandler();
+    }
+    
+    step_counter_label = NULL;
+    batt_voltage_label = NULL;
+    if (transmitTask != nullptr && !transmitTask->paused) {
+        lv_timer_pause(transmitTask);
+        Serial.println("lv_timer_pause transmitTask");
+    }
+}
+
+void menu_name_label_event_cb(lv_event_t *e);
 
 static void create_app(lv_obj_t *parent,const char *name, const lv_img_dsc_t *img, app_t *app_fun) {
   /* Create an interactive button named after the app. */
@@ -75,16 +88,6 @@ static void create_app(lv_obj_t *parent,const char *name, const lv_img_dsc_t *im
   if (img != nullptr) {
     lv_obj_t *icon = lv_img_create(btn);
     lv_img_set_src(icon, img);
-    // Store icon reference for theme switching
-    icon_refs.push_back(icon);
-    // Set initial color based on current mode
-    if (dark_mode_enabled) {
-      lv_obj_set_style_img_recolor(icon, lv_color_white(), 0);
-      lv_obj_set_style_img_recolor_opa(icon, LV_OPA_100, 0);
-    } else {
-      lv_obj_set_style_img_recolor(icon, lv_color_black(), 0);
-      lv_obj_set_style_img_recolor_opa(icon, LV_OPA_100, 0);
-    }
     lv_obj_center(icon);
   }
   /* Text change event callback */
@@ -123,33 +126,7 @@ static void create_app(lv_obj_t *parent,const char *name, const lv_img_dsc_t *im
           lv_obj_center(text);
           lv_label_set_text(text, LV_SYMBOL_LEFT);
           /* Clean up useless controls and return */
-          lv_obj_add_event_cb(
-              return_btn,
-              [](lv_event_t *e) {
-                lv_obj_t *parent = lv_obj_get_parent(lv_event_get_target(e));
-                app_t *exit_func_cb = (app_t *)lv_event_get_user_data(e);
-                if (exit_func_cb->exit_func_cb != nullptr) { /* Execute callback on exit */
-                  (*exit_func_cb->exit_func_cb)(parent);
-                }
-                lv_group_set_default(menu_g);
-                lv_indev_set_group(indev, menu_g);
-                lv_obj_clean(parent);
-                lv_obj_set_tile_id(main_screen, 0, 0, LV_ANIM_ON);
-                if(chart != NULL)
-                {
-                    chart = NULL;
-                    suspend_vadTaskHandler();
-                }
-                
-                step_counter_label = NULL;
-                batt_voltage_label = NULL;
-                if (!transmitTask->paused) {
-                lv_timer_pause(transmitTask);
-                Serial.println("lv_timer_pause transmitTask");
-                }
-
-              },
-              LV_EVENT_CLICKED, func_cb);
+          lv_obj_add_event_cb(return_btn, common_back_button_event_handler, LV_EVENT_CLICKED, func_cb);
 
           lv_obj_set_tile_id(main_screen, 0, 1, LV_ANIM_ON);
         }
@@ -161,46 +138,18 @@ void style_init() {
   lv_style_init(&style_frameless);
   lv_style_set_radius(&style_frameless, 0);
   lv_style_set_border_width(&style_frameless, 0);
+  lv_style_set_bg_opa(&style_frameless, LV_OPA_COVER);
   lv_style_set_bg_color(&style_frameless, lv_color_white());
 }
 
-// Theme switching for dark mode (battery saving)
-static lv_obj_t *menu_panel_ref = nullptr;
-static lv_obj_t *desc_label_ref = nullptr;
-
-void apply_theme() {
-  if (menu_panel_ref == nullptr || desc_label_ref == nullptr) return;
-  
-  if (dark_mode_enabled) {
-    // Dark mode - black background, white text and icons
-    lv_obj_set_style_bg_color(menu_panel_ref, lv_color_hex(0x000000), LV_PART_MAIN);
-    lv_obj_set_style_bg_color(desc_label_ref, lv_color_hex(0x000000), LV_PART_MAIN);
-    lv_obj_set_style_text_color(desc_label_ref, lv_color_hex(0xffffff), LV_PART_MAIN);
-    lv_style_set_bg_color(&style_frameless, lv_color_black());
-    // Update all icons to white
-    for (auto icon : icon_refs) {
-      if (icon && lv_obj_is_valid(icon)) {
-        lv_obj_set_style_img_recolor(icon, lv_color_white(), 0);
-        lv_obj_set_style_img_recolor_opa(icon, LV_OPA_100, 0);
-      }
-    }
-  } else {
-    // Light mode - white background, black text and icons
-    lv_obj_set_style_bg_color(menu_panel_ref, lv_color_hex(0xffffff), LV_PART_MAIN);
-    lv_obj_set_style_bg_color(desc_label_ref, lv_color_hex(0x000000), LV_PART_MAIN);
-    lv_obj_set_style_text_color(desc_label_ref, lv_color_hex(0xffffff), LV_PART_MAIN);
-    lv_style_set_bg_color(&style_frameless, lv_color_white());
-    // Update all icons to black
-    for (auto icon : icon_refs) {
-      if (icon && lv_obj_is_valid(icon)) {
-        lv_obj_set_style_img_recolor(icon, lv_color_black(), 0);
-        lv_obj_set_style_img_recolor_opa(icon, LV_OPA_100, 0);
-      }
-    }
-  }
-}
-
 void ui_init(void) {
+  keyboard = new KeyboardDevice();
+  mouse = new MouseDevice();
+  //bleComposite.addDevice(keyboard);
+  //bleComposite.addDevice(mouse);
+  /* Initialize BLE Composite HID */
+  //bleComposite.begin();
+
   menu_g = lv_group_create();// crea los lv_group menu
   app_g = lv_group_create();// crea los lv_group app
   indev = lv_indev_get_next(NULL); // obtiene el siguiente indev
@@ -216,7 +165,6 @@ void ui_init(void) {
 
   /* Create two views for switching menus and app UI */
   lv_obj_t *menu_panel = lv_tileview_add_tile(main_screen, 0, 0, LV_DIR_HOR);
-  menu_panel_ref = menu_panel; // Store reference for theme switching
   lv_obj_set_style_bg_color(menu_panel, lv_color_hex(0xffffff), LV_PART_MAIN);
   lv_obj_t *app_panel = lv_tileview_add_tile(main_screen, 0, 1, LV_DIR_HOR); 
   if(app_panel == NULL) // si app_panel es NULL
@@ -249,7 +197,6 @@ void ui_init(void) {
 
   /* Initialize the label */
   lv_obj_t *desc_label = lv_label_create(menu_panel);
-  desc_label_ref = desc_label; // Store reference for theme switching
   lv_obj_set_width(desc_label, LV_PCT(100));
   lv_obj_align(desc_label, LV_ALIGN_BOTTOM_MID, 0, -10);
   lv_obj_set_style_text_align(desc_label, LV_TEXT_ALIGN_CENTER, 0);
@@ -262,9 +209,6 @@ void ui_init(void) {
 
   lv_event_send(lv_obj_get_child(panel, 0), LV_EVENT_FOCUSED, NULL);
   lv_obj_update_snap(panel, LV_ANIM_ON);
-  
-  // Apply initial theme
-  apply_theme();
 }
 
 void menu_name_label_event_cb(lv_event_t *e) {
@@ -274,38 +218,3 @@ void menu_name_label_event_cb(lv_event_t *e) {
   const char *v = (const char *)lv_msg_get_payload(m);
   lv_label_set_text_fmt(label, v);
 }
-
-static lv_obj_t *create_icon(lv_obj_t *parent, const lv_img_dsc_t *img) {
-    lv_obj_t *icon = lv_img_create(parent);
-    lv_img_set_src(icon, img);
-    lv_obj_center(icon);
-    return icon;
-}
-/*
-void ui_send_msg(char *str, uint32_t delay) {
-  lv_obj_t *msg_obj = lv_obj_create(main_screen);
-  lv_obj_remove_style(msg_obj, NULL, LV_PART_SCROLLBAR);
-  lv_obj_align(msg_obj, LV_ALIGN_TOP_MID, 0, 0);
-  lv_obj_set_size(msg_obj, 200, 40);
-
-  lv_obj_t *label = lv_label_create(msg_obj);
-  lv_obj_center(label);
-  lv_label_set_text(label, str);
-  lv_label_set_long_mode(label, LV_LABEL_LONG_SCROLL);
-
-  lv_anim_t a;
-  lv_anim_init(&a);
-  lv_anim_set_exec_cb(&a, [](void *obj, int32_t v) { lv_obj_align((lv_obj_t *)obj, LV_ALIGN_TOP_MID, 0, v); });
-  lv_anim_set_var(&a, msg_obj);
-  lv_anim_set_time(&a, 500);
-  lv_anim_set_values(&a, -40, 0);
-  lv_anim_set_playback_time(&a, 500);
-  lv_anim_set_playback_delay(&a, delay);
-  lv_anim_set_repeat_count(&a, 1);
-  lv_anim_set_deleted_cb(&a, [](lv_anim_t *a) {
-    lv_obj_t *obj = (lv_obj_t *)a->var;
-    lv_obj_del(obj);
-  });
-  lv_anim_start(&a);
-}
-*/

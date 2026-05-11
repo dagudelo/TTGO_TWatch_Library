@@ -1,0 +1,136 @@
+# LilyGoGui - Complete Smartwatch Interface Documentation
+
+## Overview
+
+LilyGoGui is a comprehensive smartwatch interface for the LilyGo T-Watch S3 (ESP32-S3) featuring a full suite of applications including time management, wireless connectivity, health tracking, multimedia, and system utilities. Built with LVGL 8.3.9 for smooth 240x240 pixel display rendering.
+
+**Platform**: ESP32-S3 (240MHz, 16MB Flash, 8MB PSRAM)  
+**Display**: 240x240 TFT with touch  
+**Framework**: Arduino ESP32 2.0.9 + LVGL 8.3.9  
+**Author**: zhanguichen (Shenzhen Xinyuan Electronic Technology)  
+**License**: MIT
+
+---
+
+## Table of Contents
+
+1. [System Architecture](#system-architecture)
+2. [Core Applications](#core-applications)
+3. [Utility Applications](#utility-applications)
+4. [System Components](#system-components)
+5. [Key Features](#key-features)
+6. [API Reference](#api-reference)
+7. [File Structure](#file-structure)
+
+---
+
+## System Architecture
+
+### Main Loop Structure
+
+```cpp
+void loop() {
+    lv_task_handler();        // LVGL event processing
+    SensorHandler();          // Accelerometer, gestures
+    PMUHandler();             // Power management
+    get_BattVoltage();        // Battery monitoring
+    app_batt_voltage_update(); // Update battery app
+    check_alarm();            // Alarm monitoring
+    check_timer();            // Timer monitoring
+    lowPowerEnergyHandler();  // Sleep mode (30s timeout)
+}
+```
+
+### App System Architecture
+
+All apps follow the `app_t` structure:
+
+```cpp
+typedef struct {
+    app_func_t setup_func_cb;  // Called when app loads
+    app_func_cb exit_func_cb;   // Called when app exits
+    void *user_data;           // App-specific data
+} app_t;
+```
+
+### Power Management
+
+- **Active Mode**: Full brightness, all sensors active
+- **Light Sleep**: Screen off after 30 seconds of inactivity
+- **Wake Methods**: Touch screen, accelerometer interrupt, PMU interrupt
+- **Background Operations**: Alarms and timers continue running during sleep
+
+---
+
+## Core Applications
+
+### 1. **Alarm & Timer System** (`app_alarm.cpp/.h`)
+
+#### Features
+
+**Multiple Alarm Management**
+2. New Alarm List UI
+List View: Shows all configured alarms in a scrollable list (220x130px)
+Each Alarm Item Displays:
+Time in large font (24pt): e.g., "07:00"
+Recurrence type (10pt): "Once", "Daily", "Weekdays", etc.
+Enable/Disable toggle switch
+Delete button
+3. Quick Add Alarm
+"+ Add New Alarm" button: Instantly adds a 7:00 AM daily alarm with beep sound
+Default settings: 7:00, Daily recurrence, Beep sound, Sound enabled
+Can be customized in future updates to show a form
+4. Screen Wake-Up on Alarm Trigger
+Same behavior as timer:
+Alarm triggers in background (even when screen is off)
+Sets triggered_alarm_id flag
+check_alarm() detects flag in main loop
+Wakes screen with lv_disp_trig_activity(NULL)
+Sets brightness to 128 (medium)
+Triple vibration pattern (strong buzz)
+Plays sound 5 times (if enabled)
+Updates UI to show current state
+5. Smart Alarm Management
+Individual Control: Each alarm can be enabled/disabled independently
+Deletion: Delete button removes alarm from list and storage
+Once-Only Alarms: Automatically disabled after triggering
+Recurrence Support: Once, Daily, Weekdays, Weekends, Custom days
+Multi-Alarm: Supports unlimited alarms (memory permitting)
+Technical Implementation:
+Data Structures:
+
+
+std::vector<AlarmData> g_alarms;  // Dynamic list of all alarmsint next_alarm_id = 1;  // Unique ID counterint triggered_alarm_id = -1;  // Flag for wake-up handling
+Key Functions:
+
+load_alarms_from_storage() - Loads from /alarms.txt
+save_alarms_to_storage() - Saves all alarms to file
+add_new_alarm() - Adds alarm to list and saves
+delete_alarm(id) - Removes alarm by ID
+toggle_alarm(id) - Enable/disable alarm
+refresh_alarm_list_UI() - Rebuilds visual list
+check_alarm() - Monitors all alarms, triggers wake-up
+Storage Format Example:
+
+
+1,1,7,0,1,0,0,0,0,0,0,0,1,12,1,8,30,2,1,1,1,1,1,0,0,2,1
+(ID, enabled, hour, minute, recurrence, 7 day flags, sound type, sound enabled)
+
+How It Works:
+App Launch: Loads all alarms from /alarms.txt
+UI Display: Shows alarm list with toggle/delete controls
+Add Alarm: Click "+ Add New Alarm" → adds 7:00 AM daily alarm
+Background Monitoring: check_alarm() runs every loop cycle
+Trigger Detection: When time matches and alarm enabled → sets flag
+Wake & Alert: Next loop iteration wakes screen, vibrates, plays sound
+Persistence: All changes saved immediately to flash
+Advantages:
+✅ Persistent: Alarms survive power cycles and reboots
+✅ Multiple Alarms: Support unlimited alarms
+✅ Screen Wake: Never miss an alarm even when sleeping
+✅ Individual Control: Enable/disable/delete any alarm
+✅ Professional: Same behavior as commercial smartwatches
+✅ Efficient: Only triggers once per minute, minimal CPU usage
+✅ Visual Feedback: Clear list showing all alarms at a glance
+
+The system is production-ready and provides a complete alarm management experience! Users can now manage multiple alarms that will reliably wake the watch and alert them even when the screen is off.

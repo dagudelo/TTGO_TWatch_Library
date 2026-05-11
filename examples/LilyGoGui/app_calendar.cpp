@@ -26,47 +26,6 @@ static void event_handler(lv_event_t *e)
     }
 }
 
-// Custom calendar header with restricted year range
-static lv_obj_t *custom_calendar_header_dropdown(lv_obj_t *calendar)
-{
-    lv_obj_t *header = lv_calendar_header_dropdown_create(calendar);
-
-    // Get the year dropdown
-    uint32_t child_cnt = lv_obj_get_child_cnt(header);
-    if (child_cnt > 0) {
-        // The year dropdown is the first child (index 0), month is second (index 1)
-        lv_obj_t *year_dropdown = lv_obj_get_child(header, 0); 
-        
-        if (year_dropdown != NULL && lv_obj_check_type(year_dropdown, &lv_dropdown_class)) {
-            
-            int start_year = 2025; // Default start year
-            if (show_timeinfo.tm_year > 100) { // year > 2000
-                start_year = show_timeinfo.tm_year + 1900;
-            }
-
-            // Create year list from current year to +75 years
-            char year_options[2000] = ""; // Should be enough for ~75 years
-            for (int y = start_year; y <= start_year + 75; y++) {
-                char year_str[8];
-                sprintf(year_str, "%d\n", y);
-                strcat(year_options, year_str);
-            }
-            // Remove trailing newline
-            if (strlen(year_options) > 0) {
-                year_options[strlen(year_options) - 1] = '\0';
-            }
-            
-            lv_dropdown_set_options(year_dropdown, year_options);
-            
-            // Set current year
-            lv_dropdown_set_selected(year_dropdown, 0); // Default to current year
-        }
-    }
-    
-    return header;
-}
-
-
 static void create_calendar_view(lv_obj_t *parent)
 {
     lv_obj_t *cont = lv_obj_create(parent);
@@ -92,7 +51,7 @@ static void create_calendar_view(lv_obj_t *parent)
 
 
 #if LV_USE_CALENDAR_HEADER_DROPDOWN
-    custom_calendar_header_dropdown(calendar);
+    lv_calendar_header_dropdown_create(calendar);
 #elif LV_USE_CALENDAR_HEADER_ARROW
     lv_calendar_header_arrow_create(calendar);
 #endif

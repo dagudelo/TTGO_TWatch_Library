@@ -5,6 +5,13 @@
 #include "app_music.h"
 #include "app_wireless.h"
 #include "lvgl.h"
+#include "BleCompositeHID.h"
+#include "KeyboardDevice.h"
+#include "MouseDevice.h"
+
+extern BleCompositeHID bleComposite;
+extern KeyboardDevice* keyboard;
+extern MouseDevice* mouse;
 
 #define LV_DELAY(x)                                                                                                                                  \
   do {                                                                                                                                               \
@@ -16,8 +23,8 @@
   } while (0);
 
 void ui_init();
+void common_back_button_event_handler(lv_event_t *e);
 void ui_boot_anim();
-void apply_theme(); // Apply dark/light theme
 
 /**
  * @brief A brief

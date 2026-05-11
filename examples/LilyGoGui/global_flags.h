@@ -37,6 +37,3 @@
 #define MSG_MUSIC_TIME_END_ID    301
 
 #define MSG_FFT_ID               400
-
-/*******************dark mode**********************/
-extern bool dark_mode_enabled;
