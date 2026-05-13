@@ -42,7 +42,8 @@ LilyGoGui is a comprehensive smartwatch interface for the LilyGo T-Watch S3 (ESP
 
 6. [Development Guide](#development-guide)6. [API Reference](#api-reference)
 
-7. [File Structure](#file-structure)
+7. [Battery & Power Management](#battery---power-management)
+8. [File Structure](#file-structure)
 
 ---
 
@@ -1265,6 +1266,39 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ---
+
+## Battery & Power Management
+
+The T-Watch S3 uses a **470 mAh** LiPo battery managed by the AXP2101 PMU.
+
+### Power states
+
+| State | CPU | WiFi | BLE | Display | Draw |
+|---|---|---|---|---|---|
+| Active (screen on) | 160 MHz | connected | advertising | on | ~128 mA |
+| Low-power polling | 160 MHz | off | advertising | off | ~42 mA |
+| Light sleep (`lightSleep=true`) | stopped | off | off | off | ~0.8 mA |
+
+The firmware enters low-power polling after 30 seconds of screen inactivity:
+
+1. WiFi is gracefully disconnected (`WiFi.disconnect(true)` → `WiFi.mode(WIFI_OFF)`)
+2. Display brightness decremented to zero
+3. CPU enters a millis()-tracked polling loop, checking for PMU button, accelerometer IRQ, or touch
+4. On wake the motor vibrates briefly, display restores, and sensor interrupts are re-enabled
+
+### Expected battery life
+
+| Usage pattern | Runtime |
+|---|---|
+| Check time every 15 min (30 s active + 14.5 min polling) | ~10 hours |
+| Left untouched (one boot, then forever polling) | ~11 hours |
+| Light sleep enabled (idle, wake on button) | ~24+ days |
+
+The primary drain in low-power polling is the CPU running at 160 MHz (~35 mA). To extend battery life significantly, enable the light-sleep toggle in the UI. This uses `esp_light_sleep_start()` which stops the CPU and drops draw to sub-milliamps, waking on the PMU button or accelerometer double-tap.
+
+### Discharge tracking
+
+The battery app (`app_batt_voltage.cpp`) tracks real-time discharge rate in %/hour and mA, and estimates remaining runtime. Capacity is hardcoded at `BATTERY_CAPACITY_MAH = 470.0f`.
 
 ## Support & Resources
 
