@@ -36,7 +36,7 @@ IRsend irsend(BOARD_IR_PIN);
 #include <AudioGeneratorMP3.h>
 #include <AudioGeneratorWAV.h>
 #include <AudioOutputI2S.h>
-#include <AudioFileSourceSPIFFS.h>
+#include <AudioFileSourceLittleFS.h>
 #include <map>
 extern const unsigned char mp3_array[16509];
 extern unsigned char mp3_ring_setup[86144];
@@ -50,7 +50,7 @@ std::map<String, size_t> arraySizeMap = {
     {"mp3_array", sizeof(mp3_array)},
     {"mp3_ring_setup", sizeof(mp3_ring_setup)},
     {"boot_music", sizeof(boot_music)}};
-AudioFileSourceSPIFFS *file_fs;
+AudioFileSourceLittleFS *file_fs;
 AudioGeneratorWAV *wav = NULL;
 AudioFileSourcePROGMEM *file = NULL;
 AudioOutputI2S *out = NULL;
@@ -1053,7 +1053,7 @@ void settingPlayer()
     mp3 = new AudioGeneratorMP3();
     mp3->begin(id3, out);
 
-    file_fs = new AudioFileSourceSPIFFS();
+    file_fs = new AudioFileSourceLittleFS();
     wav = new AudioGeneratorWAV();
     player_task_cb = playMP3;
 
@@ -1093,7 +1093,7 @@ static bool CreateWAV(const char *song_name, uint32_t duration, uint16_t num_cha
     // data size in bytes - > this amount of data should be recorded from microphone later
     uint32_t data_size = sampling_rate * num_channels * bits_per_sample * duration / 8;
 
-    File new_audio_file = SPIFFS.open(song_name, FILE_WRITE);
+    File new_audio_file = LittleFS.open(song_name, FILE_WRITE);
     if (!new_audio_file)
     {
         Serial.println("Failed to create file");
@@ -1404,7 +1404,7 @@ static void PDM_Record(const char *song_name, uint32_t duration)
     }
 
     // Open created .wav file in append+binary mode to add PCM data
-    File audio_file = SPIFFS.open(song_name, FILE_APPEND);
+    File audio_file = LittleFS.open(song_name, FILE_APPEND);
     if (!audio_file)
     {
         Serial.println("Failed to create file");
@@ -1446,7 +1446,7 @@ static void PDM_Record(const char *song_name, uint32_t duration)
         {
             Serial.println("Bytes written error");
         }
-        // Save data to SPIFFS
+        // Save data to LittleFS
         audio_file.write(buf, BUFFER_SIZE);
         // Increment the counter
         counter += BUFFER_SIZE;

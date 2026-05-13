@@ -112,12 +112,12 @@ bool LilyGoLib::begin(Stream *stream)
     setTextDatum(MC_DATUM);
     setTextFont(2);
 
-    log_println("Init SPIFFS");
-    if (!SPIFFS.begin()) {
+    log_println("Init LittleFS");
+    if (!LittleFS.begin(true)) {
         fillScreen(TFT_BLACK);
         setBrightness(50);
-        drawString("Format SPIFFS...", 120, 120);
-        SPIFFS.format();
+        drawString("LittleFS mount failed", 120, 120);
+        delay(2000);
     }
 
     fillScreen(TFT_BLACK);
