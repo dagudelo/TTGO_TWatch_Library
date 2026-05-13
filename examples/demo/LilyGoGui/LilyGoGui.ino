@@ -1504,20 +1504,33 @@ void lowPowerEnergyHandler()
     else
     {
 
-         //setCpuFrequencyMhz(10);
-         WiFi.mode(WIFI_OFF);
-         //setCpuFrequencyMhz(80);
-        // my_print("=========esp_light_sleep_start=========\n");
+        // Graceful WiFi shutdown: disconnect first, then wait for
+        // stack to settle before changing mode. Avoids crash when
+        // SNTP / event callbacks are still pending.
+        WiFi.disconnect(true);
+        {
+            uint32_t settle_start = millis();
+            while (millis() - settle_start < 100) {
+                vTaskDelay(1);
+            }
+        }
+        WiFi.mode(WIFI_OFF);
+
         while (!pmuIrq && !sportsIrq && !watch.getTouched())
         {
-            delay(300); 
-            Serial.println(".");
-            // gpio_wakeup_enable ((gpio_num_t)BOARD_TOUCH_INT, GPIO_INTR_LOW_LEVEL);
-            // esp_sleep_enable_timer_wakeup(3 * 1000);
-            // esp_light_sleep_start();
+            uint32_t loop_entry = millis();
+            while (millis() - loop_entry < 300) {
+                vTaskDelay(1);
+                if (pmuIrq || sportsIrq || watch.getTouched())
+                    break;
+            }
+            if (!pmuIrq && !sportsIrq && !watch.getTouched())
+                Serial.println(".");
         }
-        // my_print("=========esp_light_sleep_end=========\n");
-         // setCpuFrequencyMhz(240);
+
+        // Re-init I2C after extended idle to prevent bus hang
+        // on the next configreFeatureInterrupt call.
+        Wire.begin(BOARD_I2C_SDA, BOARD_I2C_SCL);
     }
     watch.setWaveform(2, 15);
     watch.run();
